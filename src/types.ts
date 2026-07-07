@@ -243,3 +243,45 @@ export const MEMBERS: Member[] = [
   { email: 'wangqiang@procurement.com', name: '王强', avatarColor: 'bg-indigo-500', password: '123' },
   { email: 'zhanghua@procurement.com', name: '张华', avatarColor: 'bg-amber-500', password: '123' }
 ];
+
+// Data Center Configuration Types
+export type DataSourceType = 'pre' | 'purchase' | 'service' | 'bid';
+
+export interface ViewColumnConfig {
+  field: string;         // field path, e.g. 'code', 'name', 'ship', 'status', 'isUrgent', 'dueDate', 'amount', 'remark', or 'custom_xxx'
+  label: string;         // Display label
+  visible: boolean;      // Shown/hidden state
+  width?: number;        // column width in px
+  order: number;         // column drag order
+}
+
+export interface ViewFilterConfig {
+  field: string;         // e.g. 'status', 'isUrgent', 'ship', 'amount', 'dueDate', 'owners'
+  operator: 'equals' | 'contains' | 'greater_than_or_equal' | 'less_than_or_equal' | 'not_equals';
+  value: string;
+}
+
+export interface ViewSortConfig {
+  field: string;
+  direction: 'asc' | 'desc';
+}
+
+export interface CustomFieldConfig {
+  id: string;            // unique key, e.g. 'custom_xxx'
+  label: string;         // custom field display name, e.g. '成本科目'
+  type: 'text' | 'number';
+}
+
+export interface DataCenterConfig {
+  id: string;
+  name: string;
+  type: 'view' | 'template'; // 'view' = 动态视图, 'template' = 报表模板
+  isStarred?: boolean;       // ⭐ star indicator (favorites sorted top)
+  dataSource: DataSourceType;
+  filters: ViewFilterConfig[];
+  columns: ViewColumnConfig[];
+  sorts: ViewSortConfig[];
+  customFields: CustomFieldConfig[];
+  createdAt: string;
+}
+

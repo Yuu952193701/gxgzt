@@ -18,7 +18,8 @@ export const PreProcurement: React.FC = () => {
     suppliers,
     workflowTemplates,
     workspaceMode,
-    currentUser
+    currentUser,
+    users
   } = useAppState();
 
   // Search and Filter States
@@ -366,8 +367,32 @@ export const PreProcurement: React.FC = () => {
               return (
                 <div
                   key={project.id}
-                  className="bg-white border border-slate-200 hover:border-slate-300 rounded-xl px-5 py-4 shadow-3xs hover:shadow-xs transition-all flex flex-col md:flex-row md:items-center justify-between gap-4"
+                  className="bg-white border border-slate-200 hover:border-slate-300 rounded-xl px-5 py-4 shadow-3xs hover:shadow-xs transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 relative"
                 >
+                  {/* Owners Badge in Top-Right Corner */}
+                  <div className="absolute top-3 right-3 flex items-center space-x-1.5 bg-slate-50 border border-slate-200/60 px-2 py-0.5 rounded-lg text-[10px] font-bold text-slate-550 shadow-4xs z-10">
+                    <span className="text-slate-400 font-medium">归属:</span>
+                    {project.owners && project.owners.length > 0 ? (
+                      <div className="flex -space-x-1 overflow-hidden">
+                        {project.owners.map(email => {
+                          const member = users.find(u => u.email.toLowerCase() === email.toLowerCase());
+                          const name = member ? member.name : email.split('@')[0];
+                          return (
+                            <span
+                              key={email}
+                              className="inline-flex items-center justify-center h-4.5 px-1.5 rounded-full text-[9px] font-bold text-white bg-blue-600 ring-1 ring-white"
+                              title={`${name} (${email})`}
+                            >
+                              {name}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <span className="text-slate-400 font-semibold">待指派</span>
+                    )}
+                  </div>
+
                   {/* Select Checkbox for batch edits */}
                   <div className="flex items-center flex-shrink-0">
                     <input
@@ -485,32 +510,6 @@ export const PreProcurement: React.FC = () => {
                         </span>
                       ))}
 
-                      {/* 8. V2 Ownership badges */}
-                      {project.owners && project.owners.length > 0 ? (
-                        <div className="flex items-center space-x-1 pl-1.5 border-l border-slate-200 ml-1.5">
-                          <span className="text-[10px] text-slate-400 font-bold">归属:</span>
-                          <div className="flex -space-x-1 overflow-hidden">
-                            {project.owners.map(email => {
-                              const member = MEMBERS.find(m => m.email === email);
-                              if (!member) return null;
-                              return (
-                                <span
-                                  key={email}
-                                  className="inline-flex items-center justify-center h-4.5 px-1.5 rounded-full text-[9px] font-bold text-white bg-blue-600 ring-1 ring-white"
-                                  title={`${member.name} (${email})`}
-                                >
-                                  {member.name}
-                                </span>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      ) : (
-                        <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-slate-55 bg-slate-100 text-slate-400 border border-slate-200 border-dashed">
-                          待指派 👥
-                        </span>
-                      )}
-
                     </div>
 
                     {/* Brief Note preview if any */}
@@ -612,7 +611,7 @@ export const PreProcurement: React.FC = () => {
                   👥 统一指派归属负责人
                 </span>
                 <div className="bg-white border border-slate-200 rounded-lg p-2 max-h-28 overflow-y-auto space-y-1">
-                  {MEMBERS.map(member => {
+                  {users.map(member => {
                     const allSelectedHaveThisOwner = selectedProjectIds.every(id => {
                       const p = projects.find(item => item.id === id);
                       return p && p.owners && p.owners.includes(member.email);
@@ -743,9 +742,9 @@ export const PreProcurement: React.FC = () => {
 
       {/* Creation Modal */}
       {showCreateModal && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 bg-black/40 backdrop-blur-xs">
-          <div className={`bg-white rounded-xl shadow-2xl p-5 md:p-6 w-full ${creationTab === 'batch' ? 'max-w-4xl' : 'max-w-lg'} border border-slate-100 animate-slide-in text-slate-800 flex flex-col my-auto max-h-[calc(100vh-2rem)] overflow-hidden`}>
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4 flex-shrink-0">
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 md:p-10 bg-black/40 backdrop-blur-xs">
+          <div className={`bg-white rounded-xl shadow-2xl p-5 md:p-6 w-full ${creationTab === 'batch' ? 'max-w-4xl' : 'max-w-lg'} border border-slate-100 animate-slide-in text-slate-800`}>
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
               <h3 className="text-base font-bold text-slate-800 flex items-center space-x-2">
                 <span>➕ 新建前置需求项目</span>
               </h3>
@@ -758,7 +757,7 @@ export const PreProcurement: React.FC = () => {
             </div>
 
             {/* Tabs for Single vs Batch Creation */}
-            <div className="flex border-b border-slate-100 mb-4 text-xs flex-shrink-0">
+            <div className="flex border-b border-slate-100 mb-4 text-xs">
               <button
                 type="button"
                 onClick={() => setCreationTab('single')}
@@ -784,7 +783,7 @@ export const PreProcurement: React.FC = () => {
             </div>
 
             {creationTab === 'single' ? (
-              <form onSubmit={handleCreateProject} className="space-y-4 overflow-y-auto pr-1 flex-1 pb-2 custom-scrollbar">
+              <form onSubmit={handleCreateProject} className="space-y-4 pr-1 pb-2">
                 
                 <div>
                   <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
@@ -964,7 +963,7 @@ export const PreProcurement: React.FC = () => {
                     {workspaceMode === 'shared' && (
                       <div>
                         <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">
-                          指派归属负责人 (多选，默认当前登录用户)
+                          指派归属负责人 (多选，默认当前登录成员)
                         </label>
                         <MemberSelect
                           selectedEmails={batchOwners}
@@ -1106,7 +1105,7 @@ export const PreProcurement: React.FC = () => {
                     </div>
                   </div>
 
-                  <div className="flex-1 overflow-y-auto pr-1 max-h-[380px] space-y-2.5 custom-scrollbar">
+                  <div className="space-y-2.5">
                     {batchRows.map((row, idx) => (
                       <div key={idx} className="flex items-center space-x-2 bg-slate-50/50 p-2.5 border border-slate-200 rounded-lg">
                         <span className="text-[10px] font-bold text-slate-400 font-mono w-4 text-center">

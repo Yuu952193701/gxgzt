@@ -104,6 +104,9 @@ interface AppContextProps {
   registerUser: (email: string, name: string, password: string) => { success: boolean; message: string };
   logoutUser: () => void;
   updateUserProfile: (name: string, password?: string) => { success: boolean; message: string };
+  addUser: (email: string, name: string, password?: string) => { success: boolean; message: string };
+  deleteUser: (email: string) => { success: boolean; message: string };
+  updateUser: (email: string, name: string) => { success: boolean; message: string };
 
   // Recommended Tags Actions
   recommendedTags: RecommendedTag[];
@@ -471,7 +474,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Success
     setCurrentUser(matchedUser.email);
     setIsLoggedIn(true);
-    addSystemLog(`用户 ${matchedUser.name} (${matchedUser.email}) 登录成功`);
+    addSystemLog(`成员 ${matchedUser.name} (${matchedUser.email}) 登录成功`);
     return { success: true, message: '登录成功' };
   };
 
@@ -492,13 +495,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setUsers(updatedUsers);
     setCurrentUser(newUser.email);
     setIsLoggedIn(true);
-    addSystemLog(`新用户 ${newUser.name} (${newUser.email}) 注册成功`);
+    addSystemLog(`新成员 ${newUser.name} (${newUser.email}) 注册成功`);
     return { success: true, message: '注册成功' };
   };
 
   const logoutUser = () => {
     setIsLoggedIn(false);
-    addSystemLog(`用户退出登录`);
+    addSystemLog(`成员退出登录`);
   };
 
   const updateUserProfile = (name: string, password?: string) => {
@@ -513,8 +516,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return u;
     });
     setUsers(updatedUsers);
-    addSystemLog(`用户 ${currentUser} 更新了个人账户信息`);
+    addSystemLog(`成员 ${currentUser} 更新了个人账户信息`);
     return { success: true, message: '账户信息更新成功！' };
+  };
+
+  const addUser = (email: string, name: string, password?: string) => {
+    const emailNormalized = email.toLowerCase().trim();
+    if (users.some(u => u.email.toLowerCase() === emailNormalized)) {
+      return { success: false, message: '该账号已存在，不能重复添加！' };
+    }
+    const colors = ['emerald', 'blue', 'indigo', 'amber', 'rose', 'purple'];
+    const randomColor = colors[Math.floor(Math.random() * colors.length)];
+    const newUser: Member = {
+      email: emailNormalized,
+      name: name.trim(),
+      password: password || '123',
+      avatarColor: `bg-${randomColor}-500`
+    };
+    setUsers([...users, newUser]);
+    addSystemLog(`管理员添加了新成员 ${newUser.name} (${newUser.email})`);
+    return { success: true, message: '成员添加成功！' };
+  };
+
+  const deleteUser = (email: string) => {
+    const emailNormalized = email.toLowerCase().trim();
+    if (emailNormalized === currentUser.toLowerCase().trim()) {
+      return { success: false, message: '不能删除当前登录的账号！' };
+    }
+    if (!users.some(u => u.email.toLowerCase() === emailNormalized)) {
+      return { success: false, message: '该成员账号不存在！' };
+    }
+    setUsers(users.filter(u => u.email.toLowerCase() !== emailNormalized));
+    addSystemLog(`删除了成员账号 ${emailNormalized}`);
+    return { success: true, message: '成员删除成功！' };
+  };
+
+  const updateUser = (email: string, name: string) => {
+    const emailNormalized = email.toLowerCase().trim();
+    if (!users.some(u => u.email.toLowerCase() === emailNormalized)) {
+      return { success: false, message: '该成员账号不存在！' };
+    }
+    setUsers(users.map(u => u.email.toLowerCase() === emailNormalized ? { ...u, name: name.trim() } : u));
+    addSystemLog(`更新了成员账号 ${emailNormalized} 的姓名为 ${name}`);
+    return { success: true, message: '成员姓名更新成功！' };
   };
 
   // Sync supplier categories
@@ -655,7 +699,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       window.electronAPI.deleteBackup(filename).then(success => {
         if (success) {
           setBackups(prev => prev.filter(b => b.filename !== filename));
-          addSystemLog(`[备份库容优化] 已从用户目录清理物理备份: ${filename}`);
+          addSystemLog(`[备份库容优化] 已清理本地物理备份: ${filename}`);
         } else {
           addSystemLog(`[备份库容优化] 清理物理备份失败: ${filename}`);
         }
@@ -828,7 +872,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addSystemLog(`[启动强制物理备份] 唤醒宿主硬件级安全隔离备份镜像...`);
         const result = await window.electronAPI.createBackup(type);
         if (result.success) {
-          addSystemLog(`[物理强设备份完成] 库镜像在本地用户 AppData 目录存储归档：${result.filename}`);
+          addSystemLog(`[物理强设备份完成] 库镜像在本地 AppData 目录存储归档：${result.filename}`);
           const refreshedBackups = await window.electronAPI.getBackups();
           setBackups(refreshedBackups);
         } else {
@@ -2255,6 +2299,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         registerUser,
         logoutUser,
         updateUserProfile,
+        addUser,
+        deleteUser,
+        updateUser,
         backups,
         createBackup,
         restoreBackup,

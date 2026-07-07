@@ -55,7 +55,8 @@ export const ItemDetailsModal: React.FC<ItemDetailsModalProps> = ({ itemId, type
     workflowTemplates,
     currentUser,
     addChecklistTask,
-    workspaceMode
+    workspaceMode,
+    users
   } = useAppState();
 
   const [newTag, setNewTag] = useState('');
@@ -106,8 +107,8 @@ export const ItemDetailsModal: React.FC<ItemDetailsModalProps> = ({ itemId, type
     );
 
     // Also add to process history of the item
-    const senderName = MEMBERS.find(m => m.email === currentUser)?.name || currentUser;
-    const receiverName = MEMBERS.find(m => m.email === notificationTarget)?.name || notificationTarget;
+    const senderName = users.find(m => m.email === currentUser)?.name || currentUser;
+    const receiverName = users.find(m => m.email === notificationTarget)?.name || notificationTarget;
     
     const histRecord: ProcessHistory = {
       id: `hist-collab-${Date.now()}`,

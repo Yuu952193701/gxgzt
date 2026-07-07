@@ -29,7 +29,8 @@ export const PostProcurement: React.FC<PostProcurementProps> = ({ contractType =
     addSupplier,
     workflowTemplates,
     workspaceMode,
-    currentUser
+    currentUser,
+    users
   } = useAppState();
 
   const currentWorkflow = contractType === 'service' ? postServiceWorkflow : postWorkflow;
@@ -618,8 +619,32 @@ export const PostProcurement: React.FC<PostProcurementProps> = ({ contractType =
               return (
                 <div
                   key={contract.id}
-                  className="bg-white border border-slate-200 hover:border-slate-300 rounded-xl px-5 py-4 shadow-3xs hover:shadow-xs transition-all flex flex-col md:flex-row md:items-center justify-between gap-4"
+                  className="bg-white border border-slate-200 hover:border-slate-300 rounded-xl px-5 py-4 shadow-3xs hover:shadow-xs transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 relative"
                 >
+                  {/* Owners Badge in Top-Right Corner */}
+                  <div className="absolute top-3 right-3 flex items-center space-x-1.5 bg-slate-50 border border-slate-200/60 px-2 py-0.5 rounded-lg text-[10px] font-bold text-slate-550 shadow-4xs z-10">
+                    <span className="text-slate-400 font-medium">归属:</span>
+                    {contract.owners && contract.owners.length > 0 ? (
+                      <div className="flex -space-x-1 overflow-hidden">
+                        {contract.owners.map(email => {
+                          const member = users.find(u => u.email.toLowerCase() === email.toLowerCase());
+                          const name = member ? member.name : email.split('@')[0];
+                          return (
+                            <span
+                              key={email}
+                              className="inline-flex items-center justify-center h-4.5 px-1.5 rounded-full text-[9px] font-bold text-white bg-blue-600 ring-1 ring-white"
+                              title={`${name} (${email})`}
+                            >
+                              {name}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <span className="text-slate-400 font-semibold">待指派</span>
+                    )}
+                  </div>
+
                   {/* Select Checkbox for batch edits */}
                   <div className="flex items-center flex-shrink-0">
                     <input
@@ -726,32 +751,6 @@ export const PostProcurement: React.FC<PostProcurementProps> = ({ contractType =
                           {tag}
                         </span>
                       ))}
-
-                      {/* V2 Ownership badges */}
-                      {contract.owners && contract.owners.length > 0 ? (
-                        <div className="flex items-center space-x-1 pl-1.5 border-l border-slate-200 ml-1.5">
-                          <span className="text-[10px] text-slate-400 font-bold">归属:</span>
-                          <div className="flex -space-x-1 overflow-hidden">
-                            {contract.owners.map(email => {
-                              const member = MEMBERS.find(m => m.email === email);
-                              if (!member) return null;
-                              return (
-                                <span
-                                  key={email}
-                                  className="inline-flex items-center justify-center h-4.5 px-1.5 rounded-full text-[9px] font-bold text-white bg-blue-600 ring-1 ring-white"
-                                  title={`${member.name} (${email})`}
-                                >
-                                  {member.name}
-                                </span>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      ) : (
-                        <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-slate-100 text-slate-400 border border-slate-200 border-dashed">
-                          待指派 👥
-                        </span>
-                      )}
 
                     </div>
 
@@ -1034,7 +1033,7 @@ export const PostProcurement: React.FC<PostProcurementProps> = ({ contractType =
                   👥 统一指派归属负责人
                 </span>
                 <div className="bg-white border border-slate-200 rounded-lg p-2 max-h-28 overflow-y-auto space-y-1">
-                  {MEMBERS.map(member => {
+                  {users.map(member => {
                     const allSelectedHaveThisOwner = selectedContractIds.every(id => {
                       const c = contracts.find(item => item.id === id);
                       return c && c.owners && c.owners.includes(member.email);
@@ -1166,10 +1165,10 @@ export const PostProcurement: React.FC<PostProcurementProps> = ({ contractType =
 
       {/* Contract Creation Dialog */}
       {showCreateModal && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 bg-black/40 backdrop-blur-xs">
-          <div className="bg-white rounded-xl shadow-2xl p-5 md:p-6 w-full max-w-lg border border-slate-100 animate-slide-in text-slate-800 flex flex-col my-auto max-h-[calc(100vh-2rem)] overflow-hidden">
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 md:p-10 bg-black/40 backdrop-blur-xs">
+          <div className="bg-white rounded-xl shadow-2xl p-5 md:p-6 w-full max-w-lg border border-slate-100 animate-slide-in text-slate-800">
             
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4 flex-shrink-0">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
               <h3 className="text-base font-bold text-slate-800 flex items-center space-x-2">
                 <span>➕ 新建后置{contractType === 'service' ? '服务' : '采购'}合同及需求合并</span>
               </h3>
@@ -1181,7 +1180,7 @@ export const PostProcurement: React.FC<PostProcurementProps> = ({ contractType =
               </button>
             </div>
 
-            <form onSubmit={handleCreateContract} className="space-y-4 overflow-y-auto pr-1 flex-1 pb-2 custom-scrollbar">
+            <form onSubmit={handleCreateContract} className="space-y-4 pr-1 pb-2">
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
@@ -1595,7 +1594,7 @@ export const PostProcurement: React.FC<PostProcurementProps> = ({ contractType =
               {workspaceMode === 'shared' && (
                 <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2">
                   <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                    指派归属负责人 (可多选，默认当前登录用户)
+                    指派归属负责人 (可多选，默认当前登录成员)
                   </label>
                   <MemberSelect
                     selectedEmails={newContractOwners}

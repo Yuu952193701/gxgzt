@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutDashboard, Compass, Layers, Sliders, Anchor, BookOpen, ClipboardList, Building2, User, Users, ChevronDown } from 'lucide-react';
+import { LayoutDashboard, Compass, Layers, Sliders, Anchor, BookOpen, ClipboardList, Building2, User, Users, ChevronDown, Database } from 'lucide-react';
 import { useAppState } from '../context/AppContext';
 import { MEMBERS } from '../types';
 
@@ -26,6 +26,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
     { id: 'suppliers', label: '供应商', icon: Building2 },
     { id: 'knowledge', label: '资料库', icon: BookOpen },
     { id: 'settings', label: '设置', icon: Sliders },
+    { id: 'user', label: '成员管理', icon: Users },
+    { id: 'datacenter', label: '数据中心', icon: Database },
   ];
 
   const currentMember = MEMBERS.find(m => m.email === currentUser) || MEMBERS[0];
@@ -42,7 +44,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
       </div>
 
       {/* V2 Workspace Mode Selector Panel */}
-      <div className="p-3 border-b border-slate-800/40 space-y-2">
+      <div className="p-3 border-b border-slate-800/40">
         <div className="grid grid-cols-2 gap-1.5 bg-slate-950 p-1 rounded-lg border border-slate-850">
           <button
             onClick={() => setWorkspaceMode('personal')}
@@ -53,7 +55,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
             }`}
           >
             <User size={12} />
-            <span>个人工作台</span>
+            <span>个人</span>
           </button>
           <button
             onClick={() => setWorkspaceMode('shared')}
@@ -64,25 +66,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
             }`}
           >
             <Users size={12} />
-            <span>共享工作台</span>
+            <span>共享</span>
           </button>
         </div>
-
-        {workspaceMode === 'personal' && (
-          <div className="bg-[#1E293B]/30 rounded-lg p-2 border border-dashed border-slate-800 flex items-center justify-center py-2.5">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-              👤 个人专属协作模式
-            </span>
-          </div>
-        )}
-
-        {workspaceMode === 'shared' && (
-          <div className="bg-[#1E293B]/30 rounded-lg p-2 border border-dashed border-slate-800 flex items-center justify-center py-2.5">
-            <span className="text-[10px] font-bold text-blue-400 uppercase tracking-wider">
-              👥 团队共享协作模式
-            </span>
-          </div>
-        )}
       </div>
 
       {/* Navigation options list */}
@@ -112,7 +98,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
       <div className="p-4 border-t border-slate-800 bg-[#0B0F19] text-[10px] text-slate-500 font-mono flex flex-col space-y-1">
         <p className="flex items-center space-x-1.5">
           <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-          <span className="font-semibold text-slate-400">多员协同系统 (Multi-User)</span>
+          <span className="font-semibold text-slate-400">多成员协同系统 (Multi-Member)</span>
         </p>
         <p>数据自动持久化至 LocalStorage</p>
         <p>© 2026 采购中心协同版</p>

@@ -14,7 +14,8 @@ export const Dashboard: React.FC = () => {
     bidWorkflow, 
     workflowTemplates,
     workspaceMode,
-    currentUser
+    currentUser,
+    users
   } = useAppState();
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [selectedItemType, setSelectedItemType] = useState<'project' | 'contract' | 'bid' | null>(null);
@@ -53,6 +54,7 @@ export const Dashboard: React.FC = () => {
     remark?: string;
     isUrgent: boolean;
     dueDate?: string;
+    owners?: string[];
   }
   const actionableItems: ActionableItem[] = [];
 
@@ -125,7 +127,8 @@ export const Dashboard: React.FC = () => {
         ship: p.ship,
         remark: p.remark,
         isUrgent: p.isUrgent,
-        dueDate: p.dueDate
+        dueDate: p.dueDate,
+        owners: p.owners
       });
     } else if (col === 'green') {
       greenCount++;
@@ -156,7 +159,8 @@ export const Dashboard: React.FC = () => {
             ship: s.ship || c.ship,
             remark: s.remark || c.remark,
             isUrgent: c.isUrgent,
-            dueDate: s.dueDate || c.dueDate
+            dueDate: s.dueDate || c.dueDate,
+            owners: c.owners
           });
         } else if (col === 'green') {
           greenCount++;
@@ -180,10 +184,11 @@ export const Dashboard: React.FC = () => {
           ship: c.ship,
           remark: c.remark,
           isUrgent: c.isUrgent,
-          dueDate: c.dueDate
+          dueDate: c.dueDate,
+          owners: c.owners
         });
       } else if (col === 'green') {
-        yellowCount++; // Count yellow as actionable but keep colors consistent
+        greenCount++; // Corrected: Count green as greenCount
       } else if (col === 'blue') {
         blueCount++;
       } else if (col === 'red') {
@@ -207,7 +212,8 @@ export const Dashboard: React.FC = () => {
         ship: b.ship,
         remark: b.remark,
         isUrgent: b.isUrgent,
-        dueDate: b.dueDate
+        dueDate: b.dueDate,
+        owners: b.owners
       });
     } else if (col === 'green') {
       greenCount++;
@@ -244,7 +250,7 @@ export const Dashboard: React.FC = () => {
     }
   };
 
-  const activeUserObj = MEMBERS.find(m => m.email === currentUser) || MEMBERS[0];
+  const activeUserObj = users.find(u => u.email.toLowerCase() === currentUser.toLowerCase()) || MEMBERS[0];
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto animate-fade-in">
@@ -254,7 +260,7 @@ export const Dashboard: React.FC = () => {
         <div>
           <h2 className="text-lg font-bold text-slate-800 tracking-tight flex items-center space-x-2">
             <span>
-              {workspaceMode === 'personal' ? `👤 我的个人工作台 (${activeUserObj.name})` : '👥 团队共享工作台'}
+              {workspaceMode === 'personal' ? `👤 个人 (${activeUserObj.name})` : '👥 共享'}
             </span>
             <span className="text-xs font-bold text-blue-600 bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded-full">
               {workspaceMode === 'personal' ? '私有视图' : '共享协同视图'}
@@ -263,12 +269,8 @@ export const Dashboard: React.FC = () => {
           <p className="text-xs text-slate-500 mt-1 leading-relaxed">
             {workspaceMode === 'personal'
               ? `当前正以成员【${activeUserObj.name}】的身份进行操作。仅展示归属于您的采购合同、前置需求和招标标书。`
-              : '展示采购中心全部团队成员和共享关联的合同与进度，任何成员均可在任意卡片详情里进行认领或分工关联。'}
+              : '展示采购中心全部团队成员与共享关联的合同与进度，任何成员均可在任意卡片详情里进行认领或分工关联。'}
           </p>
-        </div>
-        <div className="text-xs bg-slate-150 border border-slate-200 px-3 py-1.5 rounded-md text-slate-600 font-mono flex items-center space-x-1.5 shadow-3xs self-start sm:self-center">
-          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-          <span>协作模式已就绪 (Beijing Time)</span>
         </div>
       </div>
 
@@ -346,9 +348,33 @@ export const Dashboard: React.FC = () => {
                   <div
                     key={item.id}
                     onClick={() => handleOpenItem(item.id, item.type)}
-                    className="group bg-white p-3.5 rounded-lg border-l-4 border-l-amber-400 border border-slate-200 shadow-3xs hover:border-amber-400 hover:shadow-xs transition-all cursor-pointer flex flex-col justify-between space-y-2.5"
+                    className="group bg-white p-3.5 rounded-lg border-l-4 border-l-amber-400 border border-slate-200 shadow-3xs hover:border-amber-400 hover:shadow-xs transition-all cursor-pointer flex flex-col justify-between space-y-2.5 relative"
                   >
-                    <div>
+                    {/* Owners Badge in Top-Right Corner */}
+                    <div className="absolute top-2.5 right-2.5 flex items-center space-x-1 bg-slate-50 border border-slate-200/60 px-1.5 py-0.5 rounded-md text-[9px] font-bold text-slate-500 shadow-4xs z-10">
+                      <span className="text-slate-400 font-medium">归属:</span>
+                      {item.owners && item.owners.length > 0 ? (
+                        <div className="flex -space-x-1 overflow-hidden">
+                          {item.owners.map(email => {
+                            const member = users.find(u => u.email.toLowerCase() === email.toLowerCase());
+                            const name = member ? member.name : email.split('@')[0];
+                            return (
+                              <span
+                                key={email}
+                                className="inline-flex items-center justify-center h-4 px-1 rounded-full text-[8px] font-bold text-white bg-blue-600 ring-1 ring-white"
+                                title={`${name} (${email})`}
+                              >
+                                {name}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <span className="text-slate-400 font-semibold">待指派</span>
+                      )}
+                    </div>
+
+                    <div className="pr-14">
                       {/* Title & Origin Tag */}
                       <div className="flex items-center justify-between gap-2 mb-1.5">
                         <span className={`text-[9px] px-1.5 py-0.2 rounded font-bold uppercase tracking-wider ${

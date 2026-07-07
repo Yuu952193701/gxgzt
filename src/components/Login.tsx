@@ -40,7 +40,7 @@ export const Login: React.FC = () => {
 
     if (isRegister) {
       if (!name.trim()) {
-        setErrorMsg('请填写用户名称！');
+        setErrorMsg('请填写成员姓名！');
         return;
       }
       if (password !== confirmPassword) {
@@ -119,16 +119,16 @@ export const Login: React.FC = () => {
             {/* Account field */}
             <div>
               <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1">
-                登录账号 (唯一邮箱或字母账号) <span className="text-rose-500">*</span>
+                登录账号 <span className="text-rose-500">*</span>
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-                  <Mail size={14} />
+                  <User size={14} />
                 </div>
                 <input
                   type="text"
                   required
-                  placeholder="如: user@example.com"
+                  placeholder="如: admin 或 zhangsan"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="block w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-blue-500 focus:bg-white transition-all font-medium"
@@ -140,7 +140,7 @@ export const Login: React.FC = () => {
             {isRegister && (
               <div>
                 <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1">
-                  用户名称 (真实姓名/昵称) <span className="text-rose-500">*</span>
+                  成员姓名 (真实姓名/昵称) <span className="text-rose-500">*</span>
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
@@ -216,7 +216,7 @@ export const Login: React.FC = () => {
           <div className="mt-6 border-t border-slate-100 pt-4">
             <p className="text-[10px] text-slate-400 leading-relaxed text-center">
               💡 系统预装了演示账户，支持极速直接登录，密码均为：<b>123</b> <br />
-              可使用任意：<b>yuzai952193701@gmail.com</b> 或 <b>liming@procurement.com</b>
+              可使用任意演示成员账号：<b>yuzai952193701@gmail.com</b> 或 <b>liming@procurement.com</b>
             </p>
           </div>
         </div>

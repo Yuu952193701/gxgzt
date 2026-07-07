@@ -3,7 +3,7 @@ import { useAppState } from '../context/AppContext';
 import { WorkflowStep, ColorState } from '../types';
 import { DEFAULT_PRE_STEPS, DEFAULT_POST_STEPS, DEFAULT_POST_SERVICE_STEPS, DEFAULT_BID_STEPS } from '../data';
 import { formatDateTime } from '../utils/time';
-import { Plus, Trash2, GripVertical, RefreshCw, Eye, Edit3, Settings2, Database, Download, Upload, RotateCcw, AlertTriangle, FileCheck, Terminal, ShieldAlert, FolderOpen, Tag, ExternalLink, RefreshCw as SpinIcon, Copy, Star, X } from 'lucide-react';
+import { Plus, Trash2, GripVertical, RefreshCw, Eye, Edit3, Settings2, Database, Download, Upload, RotateCcw, AlertTriangle, FileCheck, Terminal, ShieldAlert, FolderOpen, Tag, ExternalLink, RefreshCw as SpinIcon, Copy, Star, X, User, Users } from 'lucide-react';
 
 export const Settings: React.FC = () => {
   const {
@@ -44,55 +44,15 @@ export const Settings: React.FC = () => {
     setDefaultWorkflowTemplate,
     currentUser,
     users,
-    updateUserProfile
+    updateUserProfile,
+    addUser,
+    deleteUser,
+    updateUser
   } = useAppState();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const currentMember = users.find(u => u.email.toLowerCase() === currentUser.toLowerCase()) || { name: '', email: currentUser };
-  
-  const [profileName, setProfileName] = useState(currentMember.name);
-  const [profilePassword, setProfilePassword] = useState('');
-  const [profileConfirmPassword, setProfileConfirmPassword] = useState('');
-  const [profileMessage, setProfileMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
 
-  // Sync profile fields if currentUser or users change
-  useEffect(() => {
-    if (currentMember) {
-      setProfileName(currentMember.name);
-    }
-  }, [currentUser, users]);
-
-  const handleUpdateProfileSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setProfileMessage(null);
-
-    if (!profileName.trim()) {
-      setProfileMessage({ type: 'error', text: '用户名称不能为空！' });
-      return;
-    }
-
-    if (profilePassword) {
-      if (profilePassword !== profileConfirmPassword) {
-        setProfileMessage({ type: 'error', text: '两次输入的新密码不一致！' });
-        return;
-      }
-      if (profilePassword.length < 3) {
-        setProfileMessage({ type: 'error', text: '新密码长度至少需要3位字符！' });
-        return;
-      }
-    }
-
-    // Call update
-    const res = updateUserProfile(profileName, profilePassword || undefined);
-    if (res.success) {
-      setProfileMessage({ type: 'success', text: '您的个人账号设置已成功更新！' });
-      setProfilePassword('');
-      setProfileConfirmPassword('');
-    } else {
-      setProfileMessage({ type: 'error', text: res.message });
-    }
-  };
 
   const [activeWorkflowTab, setActiveWorkflowTab] = useState<'pre' | 'post' | 'post-service' | 'bid'>('pre');
   
@@ -401,100 +361,8 @@ export const Settings: React.FC = () => {
           <span>⚙️ 工作台系统配置</span>
         </h2>
         <p className="text-sm text-slate-400 mt-0.5">
-          管理您的个人账号及密码、离线工作流模板节点或 SQLite 数据安全备份。
+          管理离线工作流模板节点、自定义推荐标签及 SQLite 数据安全与备份迁移。
         </p>
-      </div>
-
-      {/* 👤 账号设置管理卡片 */}
-      <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden animate-fade-in">
-        <div className="border-b border-slate-100 bg-slate-50/70 p-5">
-          <h3 className="text-sm font-bold text-slate-800 flex items-center space-x-2">
-            <span>👤 账号基本信息及安全设置</span>
-          </h3>
-          <p className="text-xs text-slate-400 mt-0.5">
-            在此处修改您在工作台中的昵称或登录密码，数据将实时写入本系统并保持同步。
-          </p>
-        </div>
-
-        <div className="p-6">
-          {profileMessage && (
-            <div className={`mb-4 rounded-lg p-3 text-xs flex items-center space-x-2 ${
-              profileMessage.type === 'success' 
-                ? 'bg-emerald-50 border border-emerald-100 text-emerald-700' 
-                : 'bg-rose-50 border border-rose-100 text-rose-700'
-            }`}>
-              <span>{profileMessage.type === 'success' ? '✅' : '⚠️'}</span>
-              <span>{profileMessage.text}</span>
-            </div>
-          )}
-
-          <form onSubmit={handleUpdateProfileSubmit} className="space-y-4 max-w-xl">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
-                  登录账号 (保持唯一，不可更改)
-                </label>
-                <input
-                  type="text"
-                  disabled
-                  value={currentMember.email}
-                  className="w-full px-3 py-2 bg-slate-100 border border-slate-200 rounded-lg text-xs font-mono font-medium text-slate-500 cursor-not-allowed"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">
-                  用户名称 / 昵称 <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="请输入您的用户姓名"
-                  value={profileName}
-                  onChange={(e) => setProfileName(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-200 focus:border-blue-500 focus:outline-none rounded-lg text-xs font-bold text-slate-800 transition-colors"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-slate-100 pt-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">
-                  修改密码 (留空则不修改)
-                </label>
-                <input
-                  type="password"
-                  placeholder="如需修改密码，请输入新密码"
-                  value={profilePassword}
-                  onChange={(e) => setProfilePassword(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-200 focus:border-blue-500 focus:outline-none rounded-lg text-xs font-mono text-slate-800 transition-colors"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">
-                  确认新密码
-                </label>
-                <input
-                  type="password"
-                  placeholder="请再次输入新密码"
-                  value={profileConfirmPassword}
-                  onChange={(e) => setProfileConfirmPassword(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-200 focus:border-blue-500 focus:outline-none rounded-lg text-xs font-mono text-slate-800 transition-colors"
-                />
-              </div>
-            </div>
-
-            <div className="pt-2 flex justify-start">
-              <button
-                type="submit"
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-lg shadow-sm cursor-pointer transition-colors"
-              >
-                保存账号设置
-              </button>
-            </div>
-          </form>
-        </div>
       </div>
 
       {/* ⚙️ 业务流程模板引擎管理中心 */}
@@ -761,7 +629,7 @@ export const Settings: React.FC = () => {
                             <button
                               draggable={false}
                               onDragStart={(e) => e.stopPropagation()}
-                              title="标记为用户普通交互状态 (黄色)"
+                              title="标记为成员普通交互状态 (黄色)"
                               onClick={() => handleChangeColor(index, 'yellow')}
                               className={`h-4.5 w-4.5 rounded-sm bg-amber-400 flex items-center justify-center border hover:scale-105 transition-transform cursor-pointer ${
                                 step.color === 'yellow' ? 'border-slate-900 shadow-2xs scale-102' : 'border-transparent opacity-60'

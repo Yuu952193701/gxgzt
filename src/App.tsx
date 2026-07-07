@@ -11,6 +11,8 @@ import { Settings } from './components/Settings';
 import { Suppliers } from './components/Suppliers';
 import { ItemDetailsModal } from './components/ItemDetailsModal';
 import { Login } from './components/Login';
+import { Users as UsersPage } from './components/Users';
+import { DataCenter } from './components/DataCenter';
 
 function AppInner() {
   const { 
@@ -31,7 +33,7 @@ function AppInner() {
     return <Login />;
   }
 
-  const currentMember = users.find(u => u.email.toLowerCase() === currentUser.toLowerCase()) || { name: '未知用户', email: currentUser };
+  const currentMember = users.find(u => u.email.toLowerCase() === currentUser.toLowerCase()) || { name: '未知成员', email: currentUser };
 
   const renderContent = () => {
     switch (activeTab) {
@@ -53,6 +55,10 @@ function AppInner() {
         return <KnowledgeLibrary />;
       case 'settings':
         return <Settings />;
+      case 'user':
+        return <UsersPage />;
+      case 'datacenter':
+        return <DataCenter />;
       default:
         return <Dashboard />;
     }
@@ -78,6 +84,10 @@ function AppInner() {
         return 'D:\\采购\\资料库\\KnowledgeBase.db';
       case 'settings':
         return 'C:\\采购管理系统\\配置中心\\流程节点配置.ini';
+      case 'user':
+        return 'C:\\采购管理系统\\成员与团队\\成员配置.ini';
+      case 'datacenter':
+        return 'C:\\采购管理系统\\数据中心\\业务数据视图.db';
       default:
         return 'C:\\采购管理系统\\工作台';
     }
