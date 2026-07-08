@@ -30,7 +30,9 @@ export const PostProcurement: React.FC<PostProcurementProps> = ({ contractType =
     workflowTemplates,
     workspaceMode,
     currentUser,
-    users
+    users,
+    getContractStatusName,
+    getProjectStatusName
   } = useAppState();
 
   const currentWorkflow = contractType === 'service' ? postServiceWorkflow : postWorkflow;
@@ -128,7 +130,7 @@ export const PostProcurement: React.FC<PostProcurementProps> = ({ contractType =
                 workflowTemplates.find(t => t.module === (contractType === 'service' ? 'service' : 'purchase') && t.isDefault) ||
                 workflowTemplates.find(t => t.module === (contractType === 'service' ? 'service' : 'purchase'));
     const steps = tpl?.steps || (contractType === 'service' ? postServiceWorkflow : postWorkflow);
-    const step = steps.find(s => s.name === statusName);
+    const step = steps.find(s => s.id === statusName || s.name === statusName);
     return step ? step.color : 'green';
   };
 
@@ -138,7 +140,7 @@ export const PostProcurement: React.FC<PostProcurementProps> = ({ contractType =
                 workflowTemplates.find(t => t.module === (contractType === 'service' ? 'service' : 'purchase') && t.isDefault) ||
                 workflowTemplates.find(t => t.module === (contractType === 'service' ? 'service' : 'purchase'));
     const steps = tpl?.steps || (contractType === 'service' ? postServiceWorkflow : postWorkflow);
-    const currentIndex = steps.findIndex(s => s.name === contract.status);
+    const currentIndex = steps.findIndex(s => s.id === contract.status || s.name === contract.status);
     return {
       hasPrev: currentIndex > 0,
       hasNext: currentIndex < steps.length - 1
@@ -323,7 +325,11 @@ export const PostProcurement: React.FC<PostProcurementProps> = ({ contractType =
 
   const typeContracts = contracts.filter(c => {
     const cType = c.contractType || 'purchase';
-    return cType === contractType;
+    if (cType !== contractType) return false;
+    if (workspaceMode === 'personal') {
+      return c.owners?.includes(currentUser);
+    }
+    return true;
   });
 
   // Filter logic
@@ -386,9 +392,10 @@ export const PostProcurement: React.FC<PostProcurementProps> = ({ contractType =
       (contract.isMultiSettlement
         ? (contract.settlements?.some(s => {
             const matchesMultiShipFilter = activeShipTab !== 'multi' || multiShipSettlementFilter === 'all' || s.ship === multiShipSettlementFilter;
-            return matchesMultiShipFilter && s.status === selectedStatus;
+            const sName = getContractStatusName(s.status);
+            return matchesMultiShipFilter && (s.status === selectedStatus || sName === selectedStatus);
           }) || false)
-        : contract.status === selectedStatus);
+        : (contract.status === selectedStatus || getContractStatusName(contract.status) === selectedStatus));
 
     // 4. Color indicator filter
     const matchesColor = selectedColor === 'all' || 
@@ -705,7 +712,7 @@ export const PostProcurement: React.FC<PostProcurementProps> = ({ contractType =
                              statusColor === 'green' ? '🟢' :
                              statusColor === 'blue' ? '🔵' : '🔴'}
                           </span>
-                          {contract.status}
+                          {getContractStatusName(contract.status)}
                         </span>
                       ) : (
                         <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-3xs">
@@ -836,7 +843,7 @@ export const PostProcurement: React.FC<PostProcurementProps> = ({ contractType =
                                           bCol === 'blue' ? 'bg-blue-50 text-blue-800 border-blue-200' :
                                           'bg-red-50 text-red-800 border-red-200'
                                         }`}>
-                                          {s.status}
+                                          {getContractStatusName(s.status)}
                                         </span>
                                         {/* Batch Amount Tag */}
                                         {s.amount && (
@@ -885,11 +892,11 @@ export const PostProcurement: React.FC<PostProcurementProps> = ({ contractType =
                                     <div className="flex items-center space-x-1 flex-shrink-0 ml-2">
                                       <button
                                         title="退回上一步"
-                                        disabled={currentWorkflow.findIndex(step => step.name === s.status) <= 0}
+                                        disabled={currentWorkflow.findIndex(step => step.id === s.status || step.name === s.status) <= 0}
                                         onClick={() => {
-                                          const sIdx = currentWorkflow.findIndex(step => step.name === s.status);
+                                          const sIdx = currentWorkflow.findIndex(step => step.id === s.status || step.name === s.status);
                                           if (sIdx > 0) {
-                                            const updated = contract.settlements!.map(item => item.id === s.id ? { ...item, status: currentWorkflow[sIdx - 1].name } : item);
+                                            const updated = contract.settlements!.map(item => item.id === s.id ? { ...item, status: currentWorkflow[sIdx - 1].id } : item);
                                             updateContract(contract.id, { settlements: updated });
                                           }
                                         }}
@@ -899,11 +906,11 @@ export const PostProcurement: React.FC<PostProcurementProps> = ({ contractType =
                                       </button>
                                       <button
                                         title="流转下一步"
-                                        disabled={currentWorkflow.findIndex(step => step.name === s.status) >= currentWorkflow.length - 1}
+                                        disabled={currentWorkflow.findIndex(step => step.id === s.status || step.name === s.status) >= currentWorkflow.length - 1}
                                         onClick={() => {
-                                          const sIdx = currentWorkflow.findIndex(step => step.name === s.status);
+                                          const sIdx = currentWorkflow.findIndex(step => step.id === s.status || step.name === s.status);
                                           if (sIdx < currentWorkflow.length - 1) {
-                                            const updated = contract.settlements!.map(item => item.id === s.id ? { ...item, status: currentWorkflow[sIdx + 1].name } : item);
+                                            const updated = contract.settlements!.map(item => item.id === s.id ? { ...item, status: currentWorkflow[sIdx + 1].id } : item);
                                             updateContract(contract.id, { settlements: updated });
                                           }
                                         }}
@@ -1008,159 +1015,164 @@ export const PostProcurement: React.FC<PostProcurementProps> = ({ contractType =
           </div>
         )}
 
-        {/* Batch Action Bar */}
-        {workspaceMode === 'shared' && selectedContractIds.length > 0 && (
-          <div className="mt-4 p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3 animate-fade-in shadow-3xs">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2 text-xs font-bold text-slate-700">
-                <span className="bg-blue-100 text-blue-800 px-2 py-0.5 rounded font-mono">
-                  已选择 {selectedContractIds.length} 项
-                </span>
-                <span>批量协作控制台</span>
-              </div>
-              <button
-                onClick={() => setSelectedContractIds([])}
-                className="text-[10px] text-slate-400 hover:text-slate-600 underline cursor-pointer"
-              >
-                取消选择
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1 text-xs border-t border-slate-250/50">
-              {/* Owners Batch Setting */}
-              <div className="space-y-1.5">
-                <span className="block font-bold text-slate-500 text-[10px] uppercase tracking-wider">
-                  👥 统一指派归属负责人
-                </span>
-                <div className="bg-white border border-slate-200 rounded-lg p-2 max-h-28 overflow-y-auto space-y-1">
-                  {users.map(member => {
-                    const allSelectedHaveThisOwner = selectedContractIds.every(id => {
-                      const c = contracts.find(item => item.id === id);
-                      return c && c.owners && c.owners.includes(member.email);
-                    });
-                    return (
-                      <label key={member.email} className="flex items-center space-x-2 p-1 hover:bg-slate-50 rounded text-xs cursor-pointer select-none">
-                        <input
-                          type="checkbox"
-                          checked={allSelectedHaveThisOwner}
-                          onChange={(e) => {
-                            const add = e.target.checked;
-                            selectedContractIds.forEach(id => {
-                              const c = contracts.find(item => item.id === id);
-                              if (c) {
-                                const currentOwners = c.owners || [];
-                                const nextOwners = add
-                                  ? [...currentOwners.filter(o => o !== member.email), member.email]
-                                  : currentOwners.filter(o => o !== member.email);
-                                updateContract(id, { owners: nextOwners });
-                              }
-                            });
-                          }}
-                          className="rounded text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 cursor-pointer"
-                        />
-                        <span className="font-medium text-slate-700">{member.name}</span>
-                        <span className="text-[10px] text-slate-400">({member.email})</span>
-                      </label>
-                    );
-                  })}
+        {/* Floating Batch Action Bar */}
+        {selectedContractIds.length > 0 && (() => {
+          const contractTemplates = workflowTemplates.filter(t => t.module === (contractType === 'service' ? 'service' : 'purchase'));
+          const allContractSteps = Array.from(new Set([
+            ...currentWorkflow.map(s => s.name),
+            ...contractTemplates.flatMap(t => t.steps.map(s => s.name))
+          ]));
+          return (
+            <div className="fixed bottom-4 left-4 right-4 z-40 bg-slate-900 text-white rounded-xl shadow-2xl p-4 border border-slate-800 animate-slide-in flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div className="flex items-center space-x-3 flex-shrink-0">
+                <div className="bg-blue-600 text-white font-mono text-xs px-2.5 py-1 rounded-md font-bold shadow-sm">
+                  已选中 {selectedContractIds.length} 项{contractType === 'service' ? '服务' : '采购'}合同
                 </div>
+                <button
+                  onClick={() => setSelectedContractIds([])}
+                  className="text-slate-400 hover:text-white text-xs transition-colors cursor-pointer underline"
+                >
+                  取消选择
+                </button>
               </div>
 
-              {/* Other Batch Actions */}
-              <div className="space-y-2">
-                <span className="block font-bold text-slate-500 text-[10px] uppercase tracking-wider">
-                  🛠️ 批量操作指令
-                </span>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (window.confirm(`确认将选中的 ${selectedContractIds.length} 个合同退回上一步？`)) {
+              <div className="flex flex-wrap items-center gap-3.5 flex-1 lg:justify-end text-slate-200">
+                {/* 1. Batch Change Flow Stage */}
+                <div className="flex items-center space-x-1.5 bg-slate-800/80 px-2.5 py-1.5 rounded-lg border border-slate-700/60">
+                  <span className="text-[10px] text-slate-400 font-bold select-none">流程步骤:</span>
+                  <select
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (!val) return;
+                      if (confirm(`确认将选中的 ${selectedContractIds.length} 项合同批量变更为【${val}】步骤吗？`)) {
                         selectedContractIds.forEach(id => {
-                          moveContractStep(id, 'prev');
-                        });
-                      }
-                    }}
-                    className="py-1.5 px-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-medium rounded-lg text-xs transition-all shadow-3xs cursor-pointer flex items-center justify-center space-x-1"
-                  >
-                    <ArrowLeft size={11} />
-                    <span>退回上一步</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (window.confirm(`确认将选中的 ${selectedContractIds.length} 个合同推进到下一步？`)) {
-                        selectedContractIds.forEach(id => {
-                          moveContractStep(id, 'next');
-                        });
-                      }
-                    }}
-                    className="py-1.5 px-2 bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold rounded-lg text-xs transition-all shadow-3xs cursor-pointer flex items-center justify-center space-x-1 border border-blue-100"
-                  >
-                    <span>推进到下一步</span>
-                    <ArrowRight size={11} />
-                  </button>
-                </div>
-
-                <div className="pt-1.5 border-t border-dashed border-slate-200 flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const tag = window.prompt("请输入要统一追加的标签：");
-                      if (tag && tag.trim()) {
-                        const trimmed = tag.trim();
-                        selectedContractIds.forEach(id => {
-                          const c = contracts.find(item => item.id === id);
-                          if (c) {
-                            const currentTags = c.tags || [];
-                            if (!currentTags.includes(trimmed)) {
-                              updateContract(id, { tags: [...currentTags, trimmed] });
-                            }
-                          }
-                        });
-                        addGlobalTag(trimmed);
-                      }
-                    }}
-                    className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded text-[10px] transition-colors cursor-pointer"
-                  >
-                    🏷️ 追加标签
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (window.confirm("确认要清空选中合同的所有标签吗？")) {
-                        selectedContractIds.forEach(id => {
-                          updateContract(id, { tags: [] });
-                        });
-                      }
-                    }}
-                    className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded text-[10px] transition-colors cursor-pointer"
-                  >
-                    🏷️ 清空标签
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (window.confirm(`⚠️ 确认将选中的 ${selectedContractIds.length} 个后置合同进行批量删除吗？\n\n此操作仅从系统中删除记录，断开与前置项目的关联。此操作不可撤销！`)) {
-                        selectedContractIds.forEach(id => {
-                          deleteContract(id);
+                          updateContract(id, { status: val });
                         });
                         setSelectedContractIds([]);
                       }
+                      e.target.value = '';
                     }}
-                    className="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold rounded text-[10px] transition-colors cursor-pointer border border-rose-100/50"
+                    className="bg-transparent text-xs text-white focus:outline-none border-none cursor-pointer font-medium"
                   >
-                    🗑️ 批量删除
-                  </button>
+                    <option value="" className="text-slate-850">-- 批量选择步骤 --</option>
+                    {allContractSteps.map(step => (
+                      <option key={step} value={step} className="text-slate-850">{step}</option>
+                    ))}
+                  </select>
                 </div>
+
+                {/* 2. Batch Change Workflow Template */}
+                <div className="flex items-center space-x-1.5 bg-slate-800/80 px-2.5 py-1.5 rounded-lg border border-slate-700/60">
+                  <span className="text-[10px] text-slate-400 font-bold select-none">流程模板:</span>
+                  <select
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (!val) return;
+                      const tpl = workflowTemplates.find(t => t.id === val);
+                      if (tpl && confirm(`确认将选中的 ${selectedContractIds.length} 项合同切换到流程模板【${tpl.name}】吗？\n切换后将自动重置到该模板的首个步骤。`)) {
+                        selectedContractIds.forEach(id => {
+                          updateContract(id, {
+                            templateId: tpl.id,
+                            templateName: tpl.name,
+                            status: tpl.steps[0]?.name || '合同建立'
+                          });
+                        });
+                        setSelectedContractIds([]);
+                      }
+                      e.target.value = '';
+                    }}
+                    className="bg-transparent text-xs text-white focus:outline-none border-none cursor-pointer font-medium"
+                  >
+                    <option value="" className="text-slate-850">-- 批量更改模板 --</option>
+                    {contractTemplates.map(tpl => (
+                      <option key={tpl.id} value={tpl.id} className="text-slate-850">{tpl.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* 3. Batch Change Owners */}
+                <div className="flex items-center space-x-2 bg-slate-800/80 px-2 py-1 rounded-lg border border-slate-700/60">
+                  <span className="text-[10px] text-slate-400 font-bold select-none">指派负责人:</span>
+                  <div className="w-36 text-slate-900 font-sans">
+                    <MemberSelect
+                      selectedEmails={[]}
+                      onChange={(emails) => {
+                        if (emails.length === 0) return;
+                        const names = emails.map(e => users.find(m => m.email === e)?.name || e).join('、');
+                        if (confirm(`确认将选中的 ${selectedContractIds.length} 项合同批量指派给负责人【${names}】吗？`)) {
+                          selectedContractIds.forEach(id => {
+                            updateContract(id, { owners: emails });
+                          });
+                          setSelectedContractIds([]);
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* 4. Batch Change Tags */}
+                <div className="flex items-center space-x-1.5 bg-slate-800/80 px-2.5 py-1.5 rounded-lg border border-slate-700/60 text-xs">
+                  <span className="text-[10px] text-slate-400 font-bold select-none">追加标签:</span>
+                  <input
+                    type="text"
+                    placeholder="按回车..."
+                    className="bg-transparent border-b border-slate-700 text-xs text-white focus:outline-none w-16 placeholder-slate-500"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        const val = e.currentTarget.value.trim();
+                        if (!val) return;
+                        if (confirm(`确认向选中的 ${selectedContractIds.length} 项合同批量追加标签【${val}】吗？`)) {
+                          selectedContractIds.forEach(id => {
+                            const c = contracts.find(item => item.id === id);
+                            if (c) {
+                              const currentTags = c.tags || [];
+                              if (!currentTags.includes(val)) {
+                                updateContract(id, { tags: [...currentTags, val] });
+                              }
+                            }
+                          });
+                          setSelectedContractIds([]);
+                        }
+                        e.currentTarget.value = '';
+                      }
+                    }}
+                  />
+                </div>
+
+                {/* 5. Clear Tags */}
+                <button
+                  onClick={() => {
+                    if (confirm(`确认清空选中的 ${selectedContractIds.length} 项合同的所有自定义标签吗？`)) {
+                      selectedContractIds.forEach(id => {
+                        updateContract(id, { tags: [] });
+                      });
+                      setSelectedContractIds([]);
+                    }
+                  }}
+                  className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs text-slate-300 font-bold rounded-lg transition-colors cursor-pointer"
+                >
+                  清空标签
+                </button>
+
+                {/* 6. Batch Delete */}
+                <button
+                  onClick={() => {
+                    if (confirm(`⚠️ 危险：确认将选中的 ${selectedContractIds.length} 项后置合同进行批量彻底删除吗？\n删除后不可恢复！`)) {
+                      selectedContractIds.forEach(id => {
+                        deleteContract(id);
+                      });
+                      setSelectedContractIds([]);
+                    }
+                  }}
+                  className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-lg shadow-sm transition-all flex items-center space-x-1 cursor-pointer"
+                >
+                  <Trash2 size={13} />
+                  <span>批量删除</span>
+                </button>
               </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
       </div>
 
       {/* Contract Creation Dialog */}
@@ -1285,7 +1297,7 @@ export const PostProcurement: React.FC<PostProcurementProps> = ({ contractType =
                           className="rounded text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 cursor-pointer"
                         />
                         <span className="font-mono bg-amber-50 text-amber-800 border border-amber-100 px-1 py-0.5 rounded text-[10px]">{proj.code}</span>
-                        <span className="flex-1">{proj.name} ({proj.status})</span>
+                        <span className="flex-1">{proj.name} ({getProjectStatusName(proj.status)})</span>
                       </label>
                     ))}
                   </div>

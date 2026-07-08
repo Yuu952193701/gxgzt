@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { DemandProject, Contract, WorkflowStep, SHIPS, BackupFile, KnowledgeCategory, KnowledgePage, BidProject, ChecklistTask, RecommendedTag, Supplier, SupplierCategory, ProcessHistory, WorkflowTemplate, Member, MEMBERS } from '../types';
+import { DemandProject, Contract, SettlementBatch, WorkflowStep, SHIPS, BackupFile, KnowledgeCategory, KnowledgePage, BidProject, ChecklistTask, RecommendedTag, Supplier, SupplierCategory, ProcessHistory, WorkflowTemplate, Member, MEMBERS } from '../types';
 import { getCurrentTime, getCurrentISOString, formatDateTime, formatDate } from '../utils/time';
 import {
   DEFAULT_PRE_STEPS,
@@ -69,6 +69,12 @@ interface AppContextProps {
   updateWorkflowTemplate: (id: string, updates: Partial<WorkflowTemplate>) => void;
   duplicateWorkflowTemplate: (id: string) => void;
   setDefaultWorkflowTemplate: (id: string) => void;
+  
+  // Status name resolver helpers
+  getProjectStatusName: (p: DemandProject) => string;
+  getContractStatusName: (c: Contract) => string;
+  getSettlementStatusName: (s: SettlementBatch, contractTemplateId?: string, isService?: boolean) => string;
+  getBidStatusName: (b: BidProject) => string;
   
   // Global Tags catalog for autocomplete suggestion
   allTags: string[];
@@ -149,6 +155,12 @@ interface AppContextProps {
   addSupplierCategory: (name: string) => SupplierCategory;
   updateSupplierCategory: (id: string, name: string) => void;
   deleteSupplierCategory: (id: string) => void;
+
+  // Node Attributes
+  nodeAttributes: string[];
+  addNodeAttribute: (attr: string) => void;
+  deleteNodeAttribute: (attr: string) => void;
+  updateNodeAttribute: (oldAttr: string, newAttr: string) => void;
 }
 
 const AppContext = createContext<AppContextProps | undefined>(undefined);
@@ -164,6 +176,59 @@ const createHistoryRecord = (type: string, fromStep: string | undefined, toStep:
     toStep,
     operator
   };
+};
+
+const ensureTemplateStepsHaveIds = (templates: WorkflowTemplate[]) => {
+  let changed = false;
+  const updated = templates.map(t => {
+    let tChanged = false;
+    const steps = t.steps.map((step, idx) => {
+      if (!step.id) {
+        tChanged = true;
+        return {
+          ...step,
+          id: `step-${t.id}-${idx}-${Math.random().toString(36).substr(2, 4)}`
+        };
+      }
+      return step;
+    });
+    if (tChanged) {
+      changed = true;
+      return { ...t, steps };
+    }
+    return t;
+  });
+  return { updated, changed };
+};
+
+const migrateItemStatus = (
+  status: string,
+  templateId: string | undefined,
+  templates: WorkflowTemplate[],
+  moduleType: 'pre' | 'purchase' | 'service' | 'bid',
+  defaultSteps: WorkflowStep[]
+): string => {
+  const tpl = (templateId ? templates.find(t => t.id === templateId) : null) || 
+              templates.find(t => t.module === moduleType && t.isDefault) ||
+              templates.find(t => t.module === moduleType);
+  const steps = tpl?.steps || defaultSteps;
+
+  const isAlreadyId = steps.some(s => s.id === status);
+  if (isAlreadyId) return status;
+
+  const matchedStep = steps.find(s => s.name === status);
+  if (matchedStep) return matchedStep.id;
+
+  const moduleTemplates = templates.filter(t => t.module === moduleType);
+  for (const t of moduleTemplates) {
+    const step = t.steps.find(s => s.name === status);
+    if (step) return step.id;
+  }
+
+  const fallbackStep = defaultSteps.find(s => s.name === status);
+  if (fallbackStep) return fallbackStep.id;
+
+  return status;
 };
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -1302,9 +1367,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Workflow Template Management Actions
   const addWorkflowTemplate = (templateData: Omit<WorkflowTemplate, 'id'>) => {
+    const stepsWithUniqueIds = templateData.steps.map((s, idx) => ({
+      ...s,
+      id: `step-${Date.now()}-${idx}-${Math.random().toString(36).substr(2, 4)}`
+    }));
+
     const newTemplate: WorkflowTemplate = {
       ...templateData,
       id: `t-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      steps: stepsWithUniqueIds
     };
     
     setWorkflowTemplates(prev => {
@@ -1390,6 +1461,62 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     addSystemLog(`[工作流模板] 已将模板 ID [${id}] 设为默认模板`);
   };
 
+  // Node Attributes state and actions
+  const [nodeAttributes, setNodeAttributes] = useState<string[]>(() => {
+    const saved = localStorage.getItem('p_workbench_node_attributes');
+    if (saved) return JSON.parse(saved);
+    return ['登记', '审批', '对账', '寄出', '付款', '结算', '完成'];
+  });
+
+  useEffect(() => {
+    localStorage.setItem('p_workbench_node_attributes', JSON.stringify(nodeAttributes));
+    if (window.electronAPI) {
+      window.electronAPI.saveData('nodeAttributes', nodeAttributes).catch(err => console.error(err));
+    }
+  }, [nodeAttributes]);
+
+  const addNodeAttribute = (attr: string) => {
+    const trimmed = attr.trim();
+    if (!trimmed) return;
+    setNodeAttributes(prev => {
+      if (prev.includes(trimmed)) return prev;
+      addSystemLog(`[节点属性] 新增了属性: [${trimmed}]`);
+      return [...prev, trimmed];
+    });
+  };
+
+  const deleteNodeAttribute = (attr: string) => {
+    setNodeAttributes(prev => {
+      const filtered = prev.filter(a => a !== attr);
+      addSystemLog(`[节点属性] 删除了属性: [${attr}]`);
+      return filtered;
+    });
+  };
+
+  const updateNodeAttribute = (oldAttr: string, newAttr: string) => {
+    const trimmed = newAttr.trim();
+    if (!trimmed || oldAttr === trimmed) return;
+    setNodeAttributes(prev => {
+      const idx = prev.indexOf(oldAttr);
+      if (idx === -1) return prev;
+      const copy = [...prev];
+      copy[idx] = trimmed;
+      addSystemLog(`[节点属性] 更新了属性: [${oldAttr}] → [${trimmed}]`);
+      return copy;
+    });
+    setWorkflowTemplates(prev => {
+      return prev.map(t => ({
+        ...t,
+        steps: t.steps.map(s => {
+          if (s.nodeAttribute === oldAttr) {
+            return { ...s, nodeAttribute: trimmed };
+          }
+          return s;
+        })
+      }));
+    });
+  };
+
   // Persist transitions (dual synchronization)
   useEffect(() => {
     localStorage.setItem('p_workbench_workflow_templates', JSON.stringify(workflowTemplates));
@@ -1415,6 +1542,151 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setBidWorkflow(bidDefault);
     }
   }, [workflowTemplates]);
+
+  const getProjectStatusName = (p: DemandProject): string => {
+    const tpl = workflowTemplates.find(t => t.id === p.templateId) || 
+                workflowTemplates.find(t => t.module === 'pre' && t.isDefault) ||
+                workflowTemplates.find(t => t.module === 'pre');
+    const steps = tpl?.steps || preWorkflow;
+    const step = steps.find(s => s.id === p.status) || steps.find(s => s.name === p.status);
+    return step ? step.name : p.status;
+  };
+
+  const getContractStatusName = (c: Contract): string => {
+    const tpl = workflowTemplates.find(t => t.id === c.templateId) || 
+                workflowTemplates.find(t => t.module === (c.contractType === 'service' ? 'service' : 'purchase') && t.isDefault) ||
+                workflowTemplates.find(t => t.module === (c.contractType === 'service' ? 'service' : 'purchase'));
+    const steps = tpl?.steps || (c.contractType === 'service' ? postServiceWorkflow : postWorkflow);
+    const step = steps.find(s => s.id === c.status) || steps.find(s => s.name === c.status);
+    return step ? step.name : c.status;
+  };
+
+  const getSettlementStatusName = (s: SettlementBatch, contractTemplateId?: string, isService?: boolean): string => {
+    const tpl = workflowTemplates.find(t => t.id === contractTemplateId) || 
+                workflowTemplates.find(t => t.module === (isService ? 'service' : 'purchase') && t.isDefault) ||
+                workflowTemplates.find(t => t.module === (isService ? 'service' : 'purchase'));
+    const steps = tpl?.steps || (isService ? postServiceWorkflow : postWorkflow);
+    const step = steps.find(item => item.id === s.status) || steps.find(item => item.name === s.status);
+    return step ? step.name : s.status;
+  };
+
+  const getBidStatusName = (b: BidProject): string => {
+    const tpl = workflowTemplates.find(t => t.id === b.templateId) || 
+                workflowTemplates.find(t => t.module === 'bid' && t.isDefault) ||
+                workflowTemplates.find(t => t.module === 'bid');
+    const steps = tpl?.steps || bidWorkflow;
+    const step = steps.find(s => s.id === b.status) || steps.find(s => s.name === b.status);
+    return step ? step.name : b.status;
+  };
+
+  // Run on mount to automatically migrate old name-based workflow statuses to ID-based statuses
+  useEffect(() => {
+    // 1. Ensure all template steps have IDs
+    let templatesChanged = false;
+    const { updated: migratedTemplates, changed: tChanged } = ensureTemplateStepsHaveIds(workflowTemplates);
+    if (tChanged) {
+      templatesChanged = true;
+    }
+
+    // 2. Migrate projects
+    let projectsChanged = false;
+    const migratedProjects = projects.map(p => {
+      const newStatus = migrateItemStatus(
+        p.status,
+        p.templateId,
+        migratedTemplates,
+        'pre',
+        DEFAULT_PRE_STEPS
+      );
+      if (newStatus !== p.status) {
+        projectsChanged = true;
+        return { ...p, status: newStatus };
+      }
+      return p;
+    });
+
+    // 3. Migrate contracts and settlement batches
+    let contractsChanged = false;
+    const migratedContracts = contracts.map(c => {
+      const isService = c.contractType === 'service';
+      const defaultSteps = isService ? DEFAULT_POST_SERVICE_STEPS : DEFAULT_POST_STEPS;
+      const newStatus = migrateItemStatus(
+        c.status,
+        c.templateId,
+        migratedTemplates,
+        isService ? 'service' : 'purchase',
+        defaultSteps
+      );
+      
+      let settlementsChanged = false;
+      let migratedSettlements = c.settlements;
+      if (c.settlements) {
+        migratedSettlements = c.settlements.map(s => {
+          const newSStatus = migrateItemStatus(
+            s.status,
+            c.templateId,
+            migratedTemplates,
+            isService ? 'service' : 'purchase',
+            defaultSteps
+          );
+          if (newSStatus !== s.status) {
+            settlementsChanged = true;
+            return { ...s, status: newSStatus };
+          }
+          return s;
+        });
+      }
+
+      if (newStatus !== c.status || settlementsChanged) {
+        contractsChanged = true;
+        return { 
+          ...c, 
+          status: newStatus,
+          settlements: migratedSettlements
+        };
+      }
+      return c;
+    });
+
+    // 4. Migrate bids
+    let bidsChanged = false;
+    const migratedBids = bids.map(b => {
+      const newStatus = migrateItemStatus(
+        b.status,
+        b.templateId,
+        migratedTemplates,
+        'bid',
+        DEFAULT_BID_STEPS
+      );
+      if (newStatus !== b.status) {
+        bidsChanged = true;
+        return { ...b, status: newStatus };
+      }
+      return b;
+    });
+
+    // Apply updates
+    if (templatesChanged) {
+      setWorkflowTemplates(migratedTemplates);
+      localStorage.setItem('p_workbench_workflow_templates', JSON.stringify(migratedTemplates));
+    }
+    if (projectsChanged) {
+      setProjects(migratedProjects);
+      localStorage.setItem('p_workbench_projects', JSON.stringify(migratedProjects));
+    }
+    if (contractsChanged) {
+      setContracts(migratedContracts);
+      localStorage.setItem('p_workbench_contracts', JSON.stringify(migratedContracts));
+    }
+    if (bidsChanged) {
+      setBids(migratedBids);
+      localStorage.setItem('p_workbench_bids', JSON.stringify(migratedBids));
+    }
+
+    if (templatesChanged || projectsChanged || contractsChanged || bidsChanged) {
+      addSystemLog('[数据升级] 自动完成底层流程节点 ID 机制迁移，已有数据完美兼容！');
+    }
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('p_workbench_projects', JSON.stringify(projects));
@@ -1638,23 +1910,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         // Check if status has changed
         let updatedHistory = updates.history || b.history || [];
-        if (updates.history === undefined && updates.status !== undefined && updates.status !== b.status) {
+        let finalStatus = updates.status;
+
+        if (updates.status !== undefined) {
           const tpl = workflowTemplates.find(t => t.id === (updates.templateId || b.templateId)) ||
                       workflowTemplates.find(t => t.module === 'bid' && t.isDefault) ||
                       workflowTemplates.find(t => t.module === 'bid');
           const currentWorkflow = tpl ? tpl.steps : bidWorkflow;
 
-          const currentIndex = currentWorkflow.findIndex(step => step.name === b.status);
-          const nextIndex = currentWorkflow.findIndex(step => step.name === updates.status);
-          let type = '流程变更';
-          if (currentIndex !== -1 && nextIndex !== -1) {
-            if (nextIndex > currentIndex) type = '流程推进';
-            else if (nextIndex < currentIndex) type = '流程回退';
+          // Convert status name/id to target step
+          const foundStep = currentWorkflow.find(step => step.id === updates.status || step.name === updates.status);
+          if (foundStep) {
+            finalStatus = foundStep.id;
           }
-          updatedHistory = [
-            ...updatedHistory,
-            createHistoryRecord(type, b.status, updates.status, MEMBERS.find(m => m.email === currentUser)?.name || currentUser)
-          ];
+
+          if (finalStatus !== b.status) {
+            const currentIndex = currentWorkflow.findIndex(step => step.id === b.status || step.name === b.status);
+            const nextIndex = currentWorkflow.findIndex(step => step.id === finalStatus || step.name === finalStatus);
+            let type = '流程变更';
+            if (currentIndex !== -1 && nextIndex !== -1) {
+              if (nextIndex > currentIndex) type = '流程推进';
+              else if (nextIndex < currentIndex) type = '流程回退';
+            }
+            
+            const fromStepName = currentIndex !== -1 ? currentWorkflow[currentIndex].name : b.status;
+            const toStepName = nextIndex !== -1 ? currentWorkflow[nextIndex].name : (foundStep ? foundStep.name : updates.status);
+
+            if (updates.history === undefined) {
+              updatedHistory = [
+                ...updatedHistory,
+                createHistoryRecord(type, fromStepName, toStepName, MEMBERS.find(m => m.email === currentUser)?.name || currentUser)
+              ];
+            }
+          }
         }
 
         // Check if owners changed
@@ -1693,6 +1981,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return {
           ...b,
           ...updates,
+          status: finalStatus !== undefined ? finalStatus : b.status,
           history: updatedHistory,
           updatedAt: getCurrentISOString()
         };
@@ -1712,31 +2001,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const moveBidStep = (id: string, direction: 'next' | 'prev') => {
     setBids(prev => prev.map(b => {
       if (b.id === id) {
-        const currentIndex = bidWorkflow.findIndex(step => step.name === b.status);
+        const tpl = workflowTemplates.find(t => t.id === b.templateId) || 
+                    workflowTemplates.find(t => t.module === 'bid' && t.isDefault) ||
+                    workflowTemplates.find(t => t.module === 'bid');
+        const currentWorkflow = tpl?.steps || bidWorkflow;
+
+        const currentIndex = currentWorkflow.findIndex(step => step.id === b.status || step.name === b.status);
         if (currentIndex === -1) return b;
 
         let nextIndex = currentIndex;
-        if (direction === 'next' && currentIndex < bidWorkflow.length - 1) {
+        if (direction === 'next' && currentIndex < currentWorkflow.length - 1) {
           nextIndex = currentIndex + 1;
         } else if (direction === 'prev' && currentIndex > 0) {
           nextIndex = currentIndex - 1;
         }
 
         if (nextIndex !== currentIndex) {
-          const newStatus = bidWorkflow[nextIndex].name;
-          addSystemLog(`[标书推进] ${b.name}: ${b.status} → ${newStatus}`);
-          const fromStep = b.status;
+          const fromStepName = currentWorkflow[currentIndex].name;
+          const toStepId = currentWorkflow[nextIndex].id;
+          const toStepName = currentWorkflow[nextIndex].name;
+          addSystemLog(`[标书推进] ${b.name}: ${fromStepName} → ${toStepName}`);
           const updatedHistory = [
             ...(b.history || []),
             createHistoryRecord(
               direction === 'next' ? '流程推进' : '流程回退',
-              fromStep,
-              newStatus
+              fromStepName,
+              toStepName
             )
           ];
           return {
             ...b,
-            status: newStatus,
+            status: toStepId,
             history: updatedHistory,
             updatedAt: getCurrentISOString()
           };
@@ -1813,23 +2108,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         // Check if status has changed
         let updatedHistory = updates.history || p.history || [];
-        if (updates.history === undefined && updates.status !== undefined && updates.status !== p.status) {
+        let finalStatus = updates.status;
+
+        if (updates.status !== undefined) {
           const tpl = workflowTemplates.find(t => t.id === (updates.templateId || p.templateId)) ||
                       workflowTemplates.find(t => t.module === 'pre' && t.isDefault) ||
                       workflowTemplates.find(t => t.module === 'pre');
           const currentWorkflow = tpl ? tpl.steps : preWorkflow;
 
-          const currentIndex = currentWorkflow.findIndex(step => step.name === p.status);
-          const nextIndex = currentWorkflow.findIndex(step => step.name === updates.status);
-          let type = '流程变更';
-          if (currentIndex !== -1 && nextIndex !== -1) {
-            if (nextIndex > currentIndex) type = '流程推进';
-            else if (nextIndex < currentIndex) type = '流程回退';
+          // Convert status name/id to target step
+          const foundStep = currentWorkflow.find(step => step.id === updates.status || step.name === updates.status);
+          if (foundStep) {
+            finalStatus = foundStep.id;
           }
-          updatedHistory = [
-            ...updatedHistory,
-            createHistoryRecord(type, p.status, updates.status, MEMBERS.find(m => m.email === currentUser)?.name || currentUser)
-          ];
+
+          if (finalStatus !== p.status) {
+            const currentIndex = currentWorkflow.findIndex(step => step.id === p.status || step.name === p.status);
+            const nextIndex = currentWorkflow.findIndex(step => step.id === finalStatus || step.name === finalStatus);
+            let type = '流程变更';
+            if (currentIndex !== -1 && nextIndex !== -1) {
+              if (nextIndex > currentIndex) type = '流程推进';
+              else if (nextIndex < currentIndex) type = '流程回退';
+            }
+            
+            const fromStepName = currentIndex !== -1 ? currentWorkflow[currentIndex].name : p.status;
+            const toStepName = nextIndex !== -1 ? currentWorkflow[nextIndex].name : (foundStep ? foundStep.name : updates.status);
+
+            if (updates.history === undefined) {
+              updatedHistory = [
+                ...updatedHistory,
+                createHistoryRecord(type, fromStepName, toStepName, MEMBERS.find(m => m.email === currentUser)?.name || currentUser)
+              ];
+            }
+          }
         }
 
         // Check if owners changed
@@ -1868,6 +2179,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return {
           ...p,
           ...updates,
+          status: finalStatus !== undefined ? finalStatus : p.status,
           history: updatedHistory,
           updatedAt: getCurrentISOString()
         };
@@ -1885,30 +2197,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const moveProjectStep = (id: string, direction: 'next' | 'prev') => {
     setProjects(prev => prev.map(p => {
       if (p.id === id) {
-        const currentIndex = preWorkflow.findIndex(step => step.name === p.status);
+        const tpl = workflowTemplates.find(t => t.id === p.templateId) || 
+                    workflowTemplates.find(t => t.module === 'pre' && t.isDefault) ||
+                    workflowTemplates.find(t => t.module === 'pre');
+        const currentWorkflow = tpl?.steps || preWorkflow;
+
+        const currentIndex = currentWorkflow.findIndex(step => step.id === p.status || step.name === p.status);
         if (currentIndex === -1) return p;
 
         let nextIndex = currentIndex;
-        if (direction === 'next' && currentIndex < preWorkflow.length - 1) {
+        if (direction === 'next' && currentIndex < currentWorkflow.length - 1) {
           nextIndex = currentIndex + 1;
         } else if (direction === 'prev' && currentIndex > 0) {
           nextIndex = currentIndex - 1;
         }
 
         if (nextIndex !== currentIndex) {
-          const fromStep = p.status;
-          const toStep = preWorkflow[nextIndex].name;
+          const fromStepName = currentWorkflow[currentIndex].name;
+          const toStepId = currentWorkflow[nextIndex].id;
+          const toStepName = currentWorkflow[nextIndex].name;
           const updatedHistory = [
             ...(p.history || []),
             createHistoryRecord(
               direction === 'next' ? '流程推进' : '流程回退',
-              fromStep,
-              toStep
+              fromStepName,
+              toStepName
             )
           ];
           return {
             ...p,
-            status: toStep,
+            status: toStepId,
             history: updatedHistory,
             updatedAt: getCurrentISOString()
           };
@@ -1986,23 +2304,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         // Check if status has changed
         let updatedHistory = updates.history || c.history || [];
-        if (updates.history === undefined && updates.status !== undefined && updates.status !== c.status) {
+        let finalStatus = updates.status;
+
+        if (updates.status !== undefined) {
           const tpl = workflowTemplates.find(t => t.id === (updates.templateId || c.templateId)) ||
                       workflowTemplates.find(t => t.module === (c.contractType === 'service' ? 'service' : 'purchase') && t.isDefault) ||
                       workflowTemplates.find(t => t.module === (c.contractType === 'service' ? 'service' : 'purchase'));
           const currentWorkflow = tpl ? tpl.steps : (c.contractType === 'service' ? postServiceWorkflow : postWorkflow);
 
-          const currentIndex = currentWorkflow.findIndex(step => step.name === c.status);
-          const nextIndex = currentWorkflow.findIndex(step => step.name === updates.status);
-          let type = '流程变更';
-          if (currentIndex !== -1 && nextIndex !== -1) {
-            if (nextIndex > currentIndex) type = '流程推进';
-            else if (nextIndex < currentIndex) type = '流程回退';
+          // Convert status name/id to target step
+          const foundStep = currentWorkflow.find(step => step.id === updates.status || step.name === updates.status);
+          if (foundStep) {
+            finalStatus = foundStep.id;
           }
-          updatedHistory = [
-            ...updatedHistory,
-            createHistoryRecord(type, c.status, updates.status, MEMBERS.find(m => m.email === currentUser)?.name || currentUser)
-          ];
+
+          if (finalStatus !== c.status) {
+            const currentIndex = currentWorkflow.findIndex(step => step.id === c.status || step.name === c.status);
+            const nextIndex = currentWorkflow.findIndex(step => step.id === finalStatus || step.name === finalStatus);
+            let type = '流程变更';
+            if (currentIndex !== -1 && nextIndex !== -1) {
+              if (nextIndex > currentIndex) type = '流程推进';
+              else if (nextIndex < currentIndex) type = '流程回退';
+            }
+            
+            const fromStepName = currentIndex !== -1 ? currentWorkflow[currentIndex].name : c.status;
+            const toStepName = nextIndex !== -1 ? currentWorkflow[nextIndex].name : (foundStep ? foundStep.name : updates.status);
+
+            if (updates.history === undefined) {
+              updatedHistory = [
+                ...updatedHistory,
+                createHistoryRecord(type, fromStepName, toStepName, MEMBERS.find(m => m.email === currentUser)?.name || currentUser)
+              ];
+            }
+          }
         }
 
         // Check if owners changed
@@ -2041,6 +2375,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return {
           ...c,
           ...updates,
+          status: finalStatus !== undefined ? finalStatus : c.status,
           history: updatedHistory,
           updatedAt: getCurrentISOString()
         };
@@ -2065,12 +2400,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const moveContractStep = (id: string, direction: 'next' | 'prev') => {
     setContracts(prev => prev.map(c => {
       if (c.id === id) {
-        const currentWorkflow = c.contractType === 'service' ? postServiceWorkflow : postWorkflow;
+        const tpl = workflowTemplates.find(t => t.id === c.templateId) || 
+                    workflowTemplates.find(t => t.module === (c.contractType === 'service' ? 'service' : 'purchase') && t.isDefault) ||
+                    workflowTemplates.find(t => t.module === (c.contractType === 'service' ? 'service' : 'purchase'));
+        const currentWorkflow = tpl?.steps || (c.contractType === 'service' ? postServiceWorkflow : postWorkflow);
 
         if (c.isMultiSettlement && c.settlements && c.settlements.length > 0) {
           const updatedSettlements = c.settlements.map((batch, index) => {
             if (index === c.settlements!.length - 1) { // Apply to the latest batch
-              const currentIndex = currentWorkflow.findIndex(step => step.name === batch.status);
+              const currentIndex = currentWorkflow.findIndex(step => step.id === batch.status || step.name === batch.status);
               if (currentIndex !== -1) {
                 let nextIndex = currentIndex;
                 if (direction === 'next' && currentIndex < currentWorkflow.length - 1) {
@@ -2079,7 +2417,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   nextIndex = currentIndex - 1;
                 }
                 if (nextIndex !== currentIndex) {
-                  return { ...batch, status: currentWorkflow[nextIndex].name };
+                  return { ...batch, status: currentWorkflow[nextIndex].id };
                 }
               }
             }
@@ -2092,7 +2430,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           };
         }
 
-        const currentIndex = currentWorkflow.findIndex(step => step.name === c.status);
+        const currentIndex = currentWorkflow.findIndex(step => step.id === c.status || step.name === c.status);
         if (currentIndex === -1) return c;
 
         let nextIndex = currentIndex;
@@ -2103,19 +2441,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
 
         if (nextIndex !== currentIndex) {
-          const fromStep = c.status;
-          const toStep = currentWorkflow[nextIndex].name;
+          const fromStepName = currentWorkflow[currentIndex].name;
+          const toStepId = currentWorkflow[nextIndex].id;
+          const toStepName = currentWorkflow[nextIndex].name;
           const updatedHistory = [
             ...(c.history || []),
             createHistoryRecord(
               direction === 'next' ? '流程推进' : '流程回退',
-              fromStep,
-              toStep
+              fromStepName,
+              toStepName
             )
           ];
           return {
             ...c,
-            status: toStep,
+            status: toStepId,
             history: updatedHistory,
             updatedAt: getCurrentISOString()
           };
@@ -2271,6 +2610,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateWorkflowTemplate,
         duplicateWorkflowTemplate,
         setDefaultWorkflowTemplate,
+        nodeAttributes,
+        addNodeAttribute,
+        deleteNodeAttribute,
+        updateNodeAttribute,
         allTags,
         addGlobalTag,
         checklistTasks,
@@ -2320,6 +2663,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addSupplierCategory,
         updateSupplierCategory,
         deleteSupplierCategory,
+        getProjectStatusName,
+        getContractStatusName,
+        getSettlementStatusName,
+        getBidStatusName,
         dbConfig,
         selectFolder,
         migrateDatabase,

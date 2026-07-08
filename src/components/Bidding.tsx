@@ -27,7 +27,8 @@ export const Bidding: React.FC = () => {
     suppliers,
     workspaceMode,
     currentUser,
-    users
+    users,
+    getBidStatusName
   } = useAppState();
 
   // Search and Filter States
@@ -114,7 +115,7 @@ export const Bidding: React.FC = () => {
                 workflowTemplates.find(t => t.module === 'bid' && t.isDefault) ||
                 workflowTemplates.find(t => t.module === 'bid');
     const steps = tpl?.steps || bidWorkflow;
-    const step = steps.find(s => s.name === bid.status);
+    const step = steps.find(s => s.id === bid.status || s.name === bid.status);
     return step ? step.color : 'green';
   };
 
@@ -124,7 +125,7 @@ export const Bidding: React.FC = () => {
                 workflowTemplates.find(t => t.module === 'bid' && t.isDefault) ||
                 workflowTemplates.find(t => t.module === 'bid');
     const steps = tpl?.steps || bidWorkflow;
-    const currentIndex = steps.findIndex(s => s.name === bid.status);
+    const currentIndex = steps.findIndex(s => s.id === bid.status || s.name === bid.status);
     return {
       hasPrev: currentIndex > 0,
       hasNext: currentIndex < steps.length - 1,
@@ -205,10 +206,14 @@ export const Bidding: React.FC = () => {
   };
 
   // Quick stats calculations
-  const totalBidsCount = bids.length;
-  const inProgressBidsCount = bids.filter(b => b.resultStatus === '进行中').length;
-  const wonBidsCount = bids.filter(b => b.resultStatus === '已中标').length;
-  const urgentBidsCount = bids.filter(b => b.isUrgent).length;
+  const bidSource = workspaceMode === 'personal'
+    ? bids.filter(b => b.owners?.includes(currentUser))
+    : bids;
+
+  const totalBidsCount = bidSource.length;
+  const inProgressBidsCount = bidSource.filter(b => b.resultStatus === '进行中').length;
+  const wonBidsCount = bidSource.filter(b => b.resultStatus === '已中标').length;
+  const urgentBidsCount = bidSource.filter(b => b.isUrgent).length;
 
   // Filter application
   const filteredBids = bids.filter(bid => {
@@ -231,7 +236,7 @@ export const Bidding: React.FC = () => {
     const shipMatch = selectedShip === 'all' || (bid.ship || '').split(',').map(s => s.trim()).includes(selectedShip);
 
     // 3. Status filter
-    const statusMatch = selectedStatus === 'all' || bid.status === selectedStatus;
+    const statusMatch = selectedStatus === 'all' || bid.status === selectedStatus || getBidStatusName(bid.status) === selectedStatus;
 
     // 4. Result status filter
     const resultMatch = selectedResult === 'all' || bid.resultStatus === selectedResult;
@@ -591,7 +596,7 @@ export const Bidding: React.FC = () => {
                            statusColor === 'green' ? '🟢' :
                            statusColor === 'blue' ? '🔵' : '🔴'}
                         </span>
-                        {bid.status}
+                        {getBidStatusName(bid.status)}
                       </span>
                     </div>
 
@@ -652,141 +657,189 @@ export const Bidding: React.FC = () => {
       </div>
 
       {/* Batch Actions Console */}
-      {selectedBidIds.length > 0 && (
-        <div className="fixed bottom-4 left-4 right-4 z-40 bg-slate-900 text-white rounded-xl shadow-2xl p-4 border border-slate-800 animate-slide-in flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="flex items-center space-x-3 flex-shrink-0">
-            <div className="bg-blue-600 text-white font-mono text-xs px-2.5 py-1 rounded-md font-bold shadow-sm">
-              已选中 {selectedBidIds.length} 项标书
-            </div>
-            <button
-              onClick={() => setSelectedBidIds([])}
-              className="text-slate-400 hover:text-white text-xs transition-colors cursor-pointer"
-            >
-              取消选中
-            </button>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3.5 flex-1 justify-end">
-            {/* 1. Batch Change Flow Stage */}
-            <div className="flex items-center space-x-1.5 bg-slate-800/80 px-2 py-1.5 rounded-lg border border-slate-700/60">
-              <span className="text-[10px] text-slate-400 font-bold select-none">流转阶段:</span>
-              <select
-                onChange={(e) => {
-                  const val = e.target.value;
-                  if (!val) return;
-                  if (confirm(`确认将选中的 ${selectedBidIds.length} 项标书批量流转至【${val}】环节吗？`)) {
-                    selectedBidIds.forEach(id => {
-                      updateBid(id, { status: val });
-                    });
-                    setSelectedBidIds([]);
-                  }
-                  e.target.value = '';
-                }}
-                className="bg-transparent text-xs text-white focus:outline-none border-none cursor-pointer font-medium"
+      {/* Floating Batch Action Bar */}
+      {selectedBidIds.length > 0 && (() => {
+        const bidTemplates = workflowTemplates.filter(t => t.module === 'bid');
+        const allBidSteps = Array.from(new Set([
+          ...bidWorkflow.map(s => s.name),
+          ...bidTemplates.flatMap(t => t.steps.map(s => s.name))
+        ]));
+        return (
+          <div className="fixed bottom-4 left-4 right-4 z-40 bg-slate-900 text-white rounded-xl shadow-2xl p-4 border border-slate-800 animate-slide-in flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div className="flex items-center space-x-3 flex-shrink-0">
+              <div className="bg-blue-600 text-white font-mono text-xs px-2.5 py-1 rounded-md font-bold shadow-sm">
+                已选中 {selectedBidIds.length} 项标书
+              </div>
+              <button
+                onClick={() => setSelectedBidIds([])}
+                className="text-slate-400 hover:text-white text-xs transition-colors cursor-pointer underline"
               >
-                <option value="" className="text-slate-800">-- 批量流转 --</option>
-                {allWorkflowSteps.map(step => (
-                  <option key={step.name} value={step.name} className="text-slate-800">{step.name}</option>
-                ))}
-              </select>
+                取消选择
+              </button>
             </div>
 
-            {/* 2. Batch Change Result Status */}
-            <div className="flex items-center space-x-1.5 bg-slate-800/80 px-2 py-1.5 rounded-lg border border-slate-700/60">
-              <span className="text-[10px] text-slate-400 font-bold select-none">投标结果:</span>
-              <select
-                onChange={(e) => {
-                  const val = e.target.value;
-                  if (!val) return;
-                  if (confirm(`确认将选中的 ${selectedBidIds.length} 项标书批量更改为【${val}】状态吗？`)) {
-                    selectedBidIds.forEach(id => {
-                      updateBid(id, { resultStatus: val as any });
-                    });
-                    setSelectedBidIds([]);
-                  }
-                  e.target.value = '';
-                }}
-                className="bg-transparent text-xs text-white focus:outline-none border-none cursor-pointer font-medium"
-              >
-                <option value="" className="text-slate-800">-- 批量设定结果 --</option>
-                <option value="进行中" className="text-slate-800">进行中 🔵</option>
-                <option value="已中标" className="text-slate-800">已中标 🟢</option>
-                <option value="未中标" className="text-slate-800">未中标 ⚪</option>
-                <option value="已终止" className="text-slate-800">已终止 🔴</option>
-              </select>
-            </div>
+            <div className="flex flex-wrap items-center gap-3.5 flex-1 lg:justify-end text-slate-200">
+              {/* 1. Batch Change Flow Stage */}
+              <div className="flex items-center space-x-1.5 bg-slate-800/80 px-2.5 py-1.5 rounded-lg border border-slate-700/60">
+                <span className="text-[10px] text-slate-400 font-bold select-none">流程步骤:</span>
+                <select
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (!val) return;
+                    if (confirm(`确认将选中的 ${selectedBidIds.length} 项标书批量变更为【${val}】步骤吗？`)) {
+                      selectedBidIds.forEach(id => {
+                        updateBid(id, { status: val });
+                      });
+                      setSelectedBidIds([]);
+                    }
+                    e.target.value = '';
+                  }}
+                  className="bg-transparent text-xs text-white focus:outline-none border-none cursor-pointer font-medium"
+                >
+                  <option value="" className="text-slate-850">-- 批量选择步骤 --</option>
+                  {allBidSteps.map(step => (
+                    <option key={step} value={step} className="text-slate-850">{step}</option>
+                  ))}
+                </select>
+              </div>
 
-            {/* 3. Batch Change Owners (Only in Shared workspace) */}
-            {workspaceMode === 'shared' && (
+              {/* 2. Batch Change Workflow Template */}
+              <div className="flex items-center space-x-1.5 bg-slate-800/80 px-2.5 py-1.5 rounded-lg border border-slate-700/60">
+                <span className="text-[10px] text-slate-400 font-bold select-none">流程模板:</span>
+                <select
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (!val) return;
+                    const tpl = workflowTemplates.find(t => t.id === val);
+                    if (tpl && confirm(`确认将选中的 ${selectedBidIds.length} 项标书切换到流程模板【${tpl.name}】吗？\n切换后将自动重置到该模板的首个步骤。`)) {
+                      selectedBidIds.forEach(id => {
+                        updateBid(id, {
+                          templateId: tpl.id,
+                          templateName: tpl.name,
+                          status: tpl.steps[0]?.name || '发标通知'
+                        });
+                      });
+                      setSelectedBidIds([]);
+                    }
+                    e.target.value = '';
+                  }}
+                  className="bg-transparent text-xs text-white focus:outline-none border-none cursor-pointer font-medium"
+                >
+                  <option value="" className="text-slate-850">-- 批量更改模板 --</option>
+                  {bidTemplates.map(tpl => (
+                    <option key={tpl.id} value={tpl.id} className="text-slate-850">{tpl.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* 3. Batch Change Result Status */}
+              <div className="flex items-center space-x-1.5 bg-slate-800/80 px-2.5 py-1.5 rounded-lg border border-slate-700/60">
+                <span className="text-[10px] text-slate-400 font-bold select-none">投标结果:</span>
+                <select
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (!val) return;
+                    if (confirm(`确认将选中的 ${selectedBidIds.length} 项标书批量更改为【${val}】状态吗？`)) {
+                      selectedBidIds.forEach(id => {
+                        updateBid(id, { resultStatus: val as any });
+                      });
+                      setSelectedBidIds([]);
+                    }
+                    e.target.value = '';
+                  }}
+                  className="bg-transparent text-xs text-white focus:outline-none border-none cursor-pointer font-medium"
+                >
+                  <option value="" className="text-slate-850">-- 批量设定结果 --</option>
+                  <option value="进行中" className="text-slate-850">进行中 🔵</option>
+                  <option value="已中标" className="text-slate-850">已中标 🟢</option>
+                  <option value="未中标" className="text-slate-850">未中标 ⚪</option>
+                  <option value="已终止" className="text-slate-850">已终止 🔴</option>
+                </select>
+              </div>
+
+              {/* 4. Batch Change Owners */}
               <div className="flex items-center space-x-2 bg-slate-800/80 px-2 py-1 rounded-lg border border-slate-700/60">
-                <span className="text-[10px] text-slate-400 font-bold select-none">批量归属:</span>
-                <div className="w-40 text-slate-900 font-sans">
+                <span className="text-[10px] text-slate-400 font-bold select-none">指派负责人:</span>
+                <div className="w-36 text-slate-900 font-sans">
                   <MemberSelect
                     selectedEmails={[]}
                     onChange={(emails) => {
                       if (emails.length === 0) return;
-                      const names = emails.map(e => users.find(m => m.email === e)?.name || e).join(', ');
-                      if (confirm(`确认将选中的 ${selectedBidIds.length} 项标书批量指派归属于【${names}】吗？`)) {
+                      const names = emails.map(e => users.find(m => m.email === e)?.name || e).join('、');
+                      if (confirm(`确认将选中的 ${selectedBidIds.length} 项标书批量指派给负责人【${names}】吗？`)) {
                         selectedBidIds.forEach(id => {
                           updateBid(id, { owners: emails });
                         });
                         setSelectedBidIds([]);
                       }
                     }}
-                    placeholder="指派归属负责人"
                   />
                 </div>
               </div>
-            )}
 
-            {/* 4. Batch Add Custom Tag */}
-            <div className="flex items-center space-x-1.5 bg-slate-800/80 px-2.5 py-1.5 rounded-lg border border-slate-700/60 text-xs">
-              <span className="text-[10px] text-slate-400 font-bold select-none">打标签:</span>
-              <input
-                type="text"
-                placeholder="输入标签按回车..."
-                className="bg-transparent border-b border-slate-700 text-xs text-white focus:outline-none w-24 placeholder-slate-500"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    const val = e.currentTarget.value.trim();
-                    if (!val) return;
-                    if (confirm(`确认将标签【${val}】添加至选中的 ${selectedBidIds.length} 项标书吗？`)) {
-                      selectedBidIds.forEach(id => {
-                        const bid = bids.find(b => b.id === id);
-                        if (bid) {
-                          const currentTags = bid.tags || [];
-                          if (!currentTags.includes(val)) {
-                            updateBid(id, { tags: [...currentTags, val] });
+              {/* 5. Batch Change Tags */}
+              <div className="flex items-center space-x-1.5 bg-slate-800/80 px-2.5 py-1.5 rounded-lg border border-slate-700/60 text-xs">
+                <span className="text-[10px] text-slate-400 font-bold select-none">追加标签:</span>
+                <input
+                  type="text"
+                  placeholder="按回车..."
+                  className="bg-transparent border-b border-slate-700 text-xs text-white focus:outline-none w-16 placeholder-slate-500"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      const val = e.currentTarget.value.trim();
+                      if (!val) return;
+                      if (confirm(`确认向选中的 ${selectedBidIds.length} 项标书批量追加标签【${val}】吗？`)) {
+                        selectedBidIds.forEach(id => {
+                          const b = bids.find(item => item.id === id);
+                          if (b) {
+                            const currentTags = b.tags || [];
+                            if (!currentTags.includes(val)) {
+                              updateBid(id, { tags: [...currentTags, val] });
+                            }
                           }
-                        }
-                      });
-                      addGlobalTag(val);
-                      setSelectedBidIds([]);
+                        });
+                        setSelectedBidIds([]);
+                      }
+                      e.currentTarget.value = '';
                     }
-                    e.currentTarget.value = '';
+                  }}
+                />
+              </div>
+
+              {/* 6. Clear Tags */}
+              <button
+                onClick={() => {
+                  if (confirm(`确认清空选中的 ${selectedBidIds.length} 项标书的所有自定义标签吗？`)) {
+                    selectedBidIds.forEach(id => {
+                      updateBid(id, { tags: [] });
+                    });
+                    setSelectedBidIds([]);
                   }
                 }}
-              />
-            </div>
+                className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs text-slate-300 font-bold rounded-lg transition-colors cursor-pointer"
+              >
+                清空标签
+              </button>
 
-            {/* 5. Batch Delete */}
-            <button
-              onClick={() => {
-                if (confirm(`⚠️ 危险操作：确认彻底删除/注销这 ${selectedBidIds.length} 项选中的标书数据吗？删除后不可恢复！`)) {
-                  selectedBidIds.forEach(id => {
-                    deleteBid(id);
-                  });
-                  setSelectedBidIds([]);
-                }
-              }}
-              className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-lg shadow-sm transition-all flex items-center space-x-1 cursor-pointer"
-            >
-              <Trash2 size={13} />
-              <span>批量注销</span>
-            </button>
+              {/* 7. Batch Delete */}
+              <button
+                onClick={() => {
+                  if (confirm(`⚠️ 危险：确认将选中的 ${selectedBidIds.length} 项标书进行批量彻底注销/删除吗？\n删除后不可恢复！`)) {
+                    selectedBidIds.forEach(id => {
+                      deleteBid(id);
+                    });
+                    setSelectedBidIds([]);
+                  }
+                }}
+                className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-lg shadow-sm transition-all flex items-center space-x-1 cursor-pointer"
+              >
+                <Trash2 size={13} />
+                <span>批量注销</span>
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ================= MODAL: CREATE BID ================= */}
       {showCreateModal && (

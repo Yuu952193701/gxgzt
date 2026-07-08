@@ -4,6 +4,7 @@ export interface WorkflowStep {
   id: string;
   name: string;
   color: ColorState;
+  nodeAttribute?: string; // Business meaning identifier
 }
 
 export interface ProcessHistory {

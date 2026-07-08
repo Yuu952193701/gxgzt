@@ -25,6 +25,9 @@ export const Settings: React.FC = () => {
     projects,
     contracts,
     bids,
+    updateProject,
+    updateContract,
+    updateBid,
     bidWorkflow,
     updateBidWorkflow,
     recommendedTags,
@@ -42,6 +45,10 @@ export const Settings: React.FC = () => {
     updateWorkflowTemplate,
     duplicateWorkflowTemplate,
     setDefaultWorkflowTemplate,
+    nodeAttributes,
+    addNodeAttribute,
+    deleteNodeAttribute,
+    updateNodeAttribute,
     currentUser,
     users,
     updateUserProfile,
@@ -96,9 +103,23 @@ export const Settings: React.FC = () => {
   const [isCreateTemplateModalOpen, setIsCreateTemplateModalOpen] = useState(false);
   const [newTemplateName, setNewTemplateName] = useState('');
 
+  // Node attributes UI states
+  const [expandedStepIds, setExpandedStepIds] = useState<Record<string, boolean>>({});
+  const [isNodeAttrModalOpen, setIsNodeAttrModalOpen] = useState(false);
+  const [editingNodeAttrIndex, setEditingNodeAttrIndex] = useState<number | null>(null);
+  const [editingNodeAttrValue, setEditingNodeAttrValue] = useState('');
+  const [newNodeAttrValue, setNewNodeAttrValue] = useState('');
+
   const [isRenameTemplateModalOpen, setIsRenameTemplateModalOpen] = useState(false);
   const [renameTemplateTargetId, setRenameTemplateTargetId] = useState<string | null>(null);
   const [renameTemplateValue, setRenameTemplateValue] = useState('');
+
+  const [deletingStepInfo, setDeletingStepInfo] = useState<{
+    id: string;
+    name: string;
+    affected: { id: string; code: string; name: string; type: string; parentContractId?: string }[];
+  } | null>(null);
+  const [migrationTargetStepId, setMigrationTargetStepId] = useState<string>('');
 
   const [isModifyDbPathModalOpen, setIsModifyDbPathModalOpen] = useState(false);
   const [modifyDbPathValue, setModifyDbPathValue] = useState('');
@@ -249,16 +270,153 @@ export const Settings: React.FC = () => {
     setNewStepColor('yellow');
   };
 
-  // 2. Delete step from current workflow
+  // 2. Delete step from current workflow with safe migration
   const handleDeleteStep = (id: string, name: string) => {
     if (currentWorkflow.length <= 1) {
       alert('工作流程中必须保留至少一步。');
       return;
     }
-    if (window.confirm(`确认删除步骤【${name}】吗？流转在此阶段的项目在前进/后退时可能重置到首个默认阶段。`)) {
-      const filtered = currentWorkflow.filter(step => step.id !== id);
-      handleUpdate(filtered);
+
+    // Find affected items
+    const affectedItems: { id: string; code: string; name: string; type: string; parentContractId?: string }[] = [];
+
+    if (selectedTemplate) {
+      const mod = selectedTemplate.module;
+      if (mod === 'pre') {
+        projects.forEach(p => {
+          if (p.templateId === selectedTemplate.id && (p.status === id || p.status === name)) {
+            affectedItems.push({ id: p.id, code: p.code, name: p.name, type: 'project' });
+          }
+        });
+      } else if (mod === 'purchase' || mod === 'service') {
+        contracts.forEach(c => {
+          if (c.templateId === selectedTemplate.id) {
+            if (c.isMultiSettlement && c.settlements) {
+              c.settlements.forEach(s => {
+                if (s.status === id || s.status === name) {
+                  affectedItems.push({ id: s.id, code: c.code, name: `${c.name} (${s.name})`, type: 'settlement', parentContractId: c.id });
+                }
+              });
+            } else {
+              if (c.status === id || c.status === name) {
+                affectedItems.push({ id: c.id, code: c.code, name: c.name, type: 'contract' });
+              }
+            }
+          }
+        });
+      } else if (mod === 'bid') {
+        bids.forEach(b => {
+          if (b.templateId === selectedTemplate.id && (b.status === id || b.status === name)) {
+            affectedItems.push({ id: b.id, code: '标书', name: b.name, type: 'bid' });
+          }
+        });
+      }
     }
+
+    if (affectedItems.length > 0) {
+      // Open the migration modal
+      setDeletingStepInfo({ id, name, affected: affectedItems });
+      const remainingSteps = currentWorkflow.filter(step => step.id !== id);
+      if (remainingSteps.length > 0) {
+        setMigrationTargetStepId(remainingSteps[0].id);
+      }
+    } else {
+      if (window.confirm(`确认删除步骤【${name}】吗？`)) {
+        const filtered = currentWorkflow.filter(step => step.id !== id);
+        handleUpdate(filtered);
+      }
+    }
+  };
+
+  const handleConfirmMigration = () => {
+    if (!deletingStepInfo || !migrationTargetStepId) return;
+
+    // Perform migration
+    const targetStep = currentWorkflow.find(s => s.id === migrationTargetStepId);
+    const targetName = targetStep ? targetStep.name : migrationTargetStepId;
+
+    deletingStepInfo.affected.forEach(item => {
+      if (item.type === 'project') {
+        const p = projects.find(x => x.id === item.id);
+        if (p) {
+          const newHist = [
+            ...(p.history || []),
+            {
+              id: `hist-mig-${Date.now()}`,
+              time: formatDateTime(new Date()),
+              type: '流程推进',
+              fromStep: deletingStepInfo.name,
+              toStep: targetName,
+              operator: '系统迁移 (节点删除引发)'
+            }
+          ];
+          updateProject(item.id, { status: migrationTargetStepId, history: newHist });
+        }
+      } else if (item.type === 'contract') {
+        const c = contracts.find(x => x.id === item.id);
+        if (c) {
+          const newHist = [
+            ...(c.history || []),
+            {
+              id: `hist-mig-${Date.now()}`,
+              time: formatDateTime(new Date()),
+              type: '流程推进',
+              fromStep: deletingStepInfo.name,
+              toStep: targetName,
+              operator: '系统迁移 (节点删除引发)'
+            }
+          ];
+          updateContract(item.id, { status: migrationTargetStepId, history: newHist });
+        }
+      } else if (item.type === 'settlement' && item.parentContractId) {
+        const c = contracts.find(x => x.id === item.parentContractId);
+        if (c && c.settlements) {
+          const updatedSettlements = c.settlements.map(s => {
+            if (s.id === item.id) {
+              const newHist = [
+                ...(s.history || []),
+                {
+                  id: `hist-mig-${Date.now()}`,
+                  time: formatDateTime(new Date()),
+                  type: '流程推进',
+                  fromStep: deletingStepInfo.name,
+                  toStep: targetName,
+                  operator: '系统一键迁移',
+                  comment: `节点【${deletingStepInfo.name}】被删除，结算批次被一键迁移至新节点【${targetName}】`
+                }
+              ];
+              return { ...s, status: migrationTargetStepId, history: newHist };
+            }
+            return s;
+          });
+          updateContract(item.parentContractId, { settlements: updatedSettlements });
+        }
+      } else if (item.type === 'bid') {
+        const b = bids.find(x => x.id === item.id);
+        if (b) {
+          const newHist = [
+            ...(b.history || []),
+            {
+              id: `hist-mig-${Date.now()}`,
+              time: formatDateTime(new Date()),
+              type: '流程推进',
+              fromStep: deletingStepInfo.name,
+              toStep: targetName,
+              operator: '系统迁移 (节点删除引发)'
+            }
+          ];
+          updateBid(item.id, { status: migrationTargetStepId, history: newHist });
+        }
+      }
+    });
+
+    // Now delete the step
+    const filtered = currentWorkflow.filter(step => step.id !== deletingStepInfo.id);
+    handleUpdate(filtered);
+
+    alert(`已成功将 ${deletingStepInfo.affected.length} 个受影响的业务项目一键安全迁移至新节点【${targetName}】，并删除了原节点！`);
+    setDeletingStepInfo(null);
+    setMigrationTargetStepId('');
   };
 
   // 3. Move step index Up/Down to rearrange order
@@ -288,6 +446,13 @@ export const Settings: React.FC = () => {
   const handleChangeColor = (index: number, newColor: ColorState) => {
     const updated = [...currentWorkflow];
     updated[index] = { ...updated[index], color: newColor };
+    handleUpdate(updated);
+  };
+
+  // 6. Bind Node Attribute to a step
+  const handleBindNodeAttribute = (index: number, attr: string) => {
+    const updated = [...currentWorkflow];
+    updated[index] = { ...updated[index], nodeAttribute: attr || undefined };
     handleUpdate(updated);
   };
 
@@ -574,9 +739,10 @@ export const Settings: React.FC = () => {
                   </span>
                 </div>
 
-                <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+                <div className="space-y-2.5 max-h-[420px] overflow-y-auto pr-1">
                   {currentWorkflow.map((step, index) => {
                     const matchesColor = step.color;
+                    const isExpanded = expandedStepIds[step.id] || false;
                     return (
                       <div
                         key={step.id}
@@ -585,7 +751,7 @@ export const Settings: React.FC = () => {
                         onDragOver={(e) => handleDragOver(e, index)}
                         onDragEnd={handleDragEnd}
                         onDrop={(e) => handleDrop(e, index)}
-                        className={`bg-white border p-3 rounded-lg shadow-3xs flex items-center justify-between group hover:border-slate-300 hover:shadow-2xs transition-all animate-fade-in ${
+                        className={`bg-white border rounded-lg shadow-3xs flex flex-col hover:border-slate-300 hover:shadow-2xs transition-all animate-fade-in ${
                           draggedIndex === index 
                             ? 'opacity-40 border-dashed border-blue-400 bg-blue-50/20' 
                             : dragOverIndex === index
@@ -593,77 +759,146 @@ export const Settings: React.FC = () => {
                             : 'border-slate-200/70'
                         }`}
                       >
-                        <div className="flex items-center space-x-3 flex-1 min-w-0">
-                          {/* Drag Handle */}
-                          <div 
-                            className="flex items-center space-x-1 font-mono text-xs font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 py-0.5 px-2 rounded cursor-grab active:cursor-grabbing select-none transition-colors"
-                            title="按住拖拽以调整次序"
-                          >
-                            <GripVertical size={12} className="text-slate-400 flex-shrink-0" />
-                            <span>#{index + 1}</span>
-                          </div>
-                          
-                          {/* Status Dot */}
-                          <span className={`h-2.5 w-2.5 rounded-full flex-shrink-0 ${
-                            matchesColor === 'yellow' ? 'bg-amber-400' :
-                            matchesColor === 'green' ? 'bg-emerald-500' :
-                            matchesColor === 'blue' ? 'bg-blue-500' :
-                            'bg-rose-500'
-                          }`} />
+                        {/* Upper row: main details and actions */}
+                        <div className="p-3 flex items-center justify-between gap-2">
+                          <div className="flex items-center space-x-3 flex-1 min-w-0">
+                            {/* Drag Handle */}
+                            <div 
+                              className="flex items-center space-x-1 font-mono text-xs font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 py-0.5 px-2 rounded cursor-grab active:cursor-grabbing select-none transition-colors"
+                              title="按住拖拽以调整次序"
+                            >
+                              <GripVertical size={12} className="text-slate-400 flex-shrink-0" />
+                              <span>#{index + 1}</span>
+                            </div>
+                            
+                            {/* Status Dot */}
+                            <span className={`h-2.5 w-2.5 rounded-full flex-shrink-0 ${
+                              matchesColor === 'yellow' ? 'bg-amber-400' :
+                              matchesColor === 'green' ? 'bg-emerald-500' :
+                              matchesColor === 'blue' ? 'bg-blue-500' :
+                              'bg-rose-500'
+                            }`} />
 
-                          <input
-                            type="text"
-                            value={step.name}
-                            draggable={false}
-                            onDragStart={(e) => e.stopPropagation()}
-                            onChange={(e) => handleRenameStep(index, e.target.value)}
-                            className="font-bold text-slate-700 text-sm focus:border-blue-500 focus:outline-none border-b border-transparent hover:border-slate-300 pb-0.5 flex-1 max-w-xs transition-colors"
-                            placeholder="输入新步骤名称..."
-                          />
-                        </div>
-
-                        {/* Actions bar for workflow config */}
-                        <div className="flex items-center space-x-2.5" draggable={false} onDragStart={(e) => e.stopPropagation()}>
-                          {/* Color selection circles buttons */}
-                          <div className="hidden md:flex items-center space-x-1 border border-slate-100 rounded-md p-0.5 bg-slate-50/50">
-                            <button
-                              draggable={false}
-                              onDragStart={(e) => e.stopPropagation()}
-                              title="标记为成员普通交互状态 (黄色)"
-                              onClick={() => handleChangeColor(index, 'yellow')}
-                              className={`h-4.5 w-4.5 rounded-sm bg-amber-400 flex items-center justify-center border hover:scale-105 transition-transform cursor-pointer ${
-                                step.color === 'yellow' ? 'border-slate-900 shadow-2xs scale-102' : 'border-transparent opacity-60'
-                              }`}
-                            />
-                            <button
-                              draggable={false}
-                              onDragStart={(e) => e.stopPropagation()}
-                              title="标记为流转等待执行阶段 (绿色)"
-                              onClick={() => handleChangeColor(index, 'green')}
-                              className={`h-4.5 w-4.5 rounded-sm bg-emerald-500 flex items-center justify-center border hover:scale-105 transition-transform cursor-pointer ${
-                                step.color === 'green' ? 'border-slate-900 shadow-2xs scale-102' : 'border-transparent opacity-60'
-                              }`}
-                            />
-                            <button
-                              draggable={false}
-                              onDragStart={(e) => e.stopPropagation()}
-                              title="标记为归档完成结算阶段 (蓝色)"
-                              onClick={() => handleChangeColor(index, 'blue')}
-                              className={`h-4.5 w-4.5 rounded-sm bg-blue-500 flex items-center justify-center border hover:scale-105 transition-transform cursor-pointer ${
-                                step.color === 'blue' ? 'border-slate-900 shadow-2xs scale-102' : 'border-transparent opacity-60'
-                              }`}
-                            />
+                            <div className="flex flex-col flex-1 min-w-0">
+                              <input
+                                type="text"
+                                value={step.name}
+                                draggable={false}
+                                onDragStart={(e) => e.stopPropagation()}
+                                onChange={(e) => handleRenameStep(index, e.target.value)}
+                                className="font-bold text-slate-700 text-sm focus:border-blue-500 focus:outline-none border-b border-transparent hover:border-slate-300 pb-0.5 w-full max-w-xs transition-colors"
+                                placeholder="输入新步骤名称..."
+                              />
+                              {step.nodeAttribute && (
+                                <span className="text-[10px] text-indigo-600 bg-indigo-50 border border-indigo-100 px-1.5 py-0.2 rounded font-medium self-start mt-1 flex items-center space-x-0.5 animate-pulse">
+                                  <span>🏷️ 流程节点属性:</span>
+                                  <span className="font-bold">{step.nodeAttribute}</span>
+                                </span>
+                              )}
+                            </div>
                           </div>
 
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteStep(step.id, step.name)}
-                            className="text-slate-400 hover:text-rose-600 p-1.5 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                            title="删除此步骤"
-                          >
-                            <Trash2 size={13} />
-                          </button>
+                          {/* Actions bar for workflow config */}
+                          <div className="flex items-center space-x-2" draggable={false} onDragStart={(e) => e.stopPropagation()}>
+                            {/* Advanced Setting Button */}
+                            <button
+                              type="button"
+                              onClick={() => setExpandedStepIds(prev => ({ ...prev, [step.id]: !prev[step.id] }))}
+                              className={`text-[11px] px-2 py-1 rounded border transition-all flex items-center space-x-0.5 cursor-pointer font-bold ${
+                                isExpanded
+                                  ? 'bg-blue-50 text-blue-600 border-blue-200 shadow-3xs'
+                                  : 'text-slate-500 hover:text-blue-600 border-slate-200/60 bg-white hover:bg-slate-50'
+                              }`}
+                            >
+                              <span>高级设置</span>
+                              <ChevronDown size={11} className={`transform transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
+                            </button>
+
+                            {/* Color selection circles buttons */}
+                            <div className="hidden md:flex items-center space-x-1 border border-slate-100 rounded-md p-0.5 bg-slate-50/50">
+                              <button
+                                type="button"
+                                draggable={false}
+                                onDragStart={(e) => e.stopPropagation()}
+                                title="标记为成员普通交互状态 (黄色)"
+                                onClick={() => handleChangeColor(index, 'yellow')}
+                                className={`h-4.5 w-4.5 rounded-sm bg-amber-400 flex items-center justify-center border hover:scale-105 transition-transform cursor-pointer ${
+                                  step.color === 'yellow' ? 'border-slate-900 shadow-2xs scale-102' : 'border-transparent opacity-60'
+                                }`}
+                              />
+                              <button
+                                type="button"
+                                draggable={false}
+                                onDragStart={(e) => e.stopPropagation()}
+                                title="标记为流转等待执行阶段 (绿色)"
+                                onClick={() => handleChangeColor(index, 'green')}
+                                className={`h-4.5 w-4.5 rounded-sm bg-emerald-500 flex items-center justify-center border hover:scale-105 transition-transform cursor-pointer ${
+                                  step.color === 'green' ? 'border-slate-900 shadow-2xs scale-102' : 'border-transparent opacity-60'
+                                }`}
+                              />
+                              <button
+                                type="button"
+                                draggable={false}
+                                onDragStart={(e) => e.stopPropagation()}
+                                title="标记为归档完成结算阶段 (蓝色)"
+                                onClick={() => handleChangeColor(index, 'blue')}
+                                className={`h-4.5 w-4.5 rounded-sm bg-blue-500 flex items-center justify-center border hover:scale-105 transition-transform cursor-pointer ${
+                                  step.color === 'blue' ? 'border-slate-900 shadow-2xs scale-102' : 'border-transparent opacity-60'
+                                }`}
+                              />
+                              <button
+                                type="button"
+                                draggable={false}
+                                onDragStart={(e) => e.stopPropagation()}
+                                title="标记为异常状态阶段 (红色)"
+                                onClick={() => handleChangeColor(index, 'red')}
+                                className={`h-4.5 w-4.5 rounded-sm bg-rose-500 flex items-center justify-center border hover:scale-105 transition-transform cursor-pointer ${
+                                  step.color === 'red' ? 'border-slate-900 shadow-2xs scale-102' : 'border-transparent opacity-60'
+                                }`}
+                              />
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteStep(step.id, step.name)}
+                              className="text-slate-400 hover:text-rose-600 p-1.5 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                              title="删除此步骤"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
                         </div>
+
+                        {/* Lower row: Advanced Settings fold-out */}
+                        {isExpanded && (
+                          <div className="border-t border-slate-100 bg-slate-50/50 p-3 rounded-b-lg space-y-2 animate-fade-in text-xs" draggable={false} onDragStart={(e) => e.stopPropagation()}>
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-2.5 rounded-lg border border-slate-200/60">
+                              <div>
+                                <span className="font-bold text-slate-700 block text-xs">流程节点属性 (Node Attribute)</span>
+                                <span className="text-slate-400 text-[10px] block mt-0.5">跨流程统一业务意义，便于数据中心一键调取</span>
+                              </div>
+                              <div className="flex items-center space-x-2 flex-shrink-0">
+                                <select
+                                  value={step.nodeAttribute || ''}
+                                  onChange={(e) => handleBindNodeAttribute(index, e.target.value)}
+                                  className="px-2.5 py-1 rounded-md border border-slate-200 bg-white text-xs text-slate-750 focus:outline-none focus:ring-1 focus:ring-blue-100 font-bold cursor-pointer"
+                                >
+                                  <option value="">-- 请选择关联节点属性 --</option>
+                                  {nodeAttributes.map(attr => (
+                                    <option key={attr} value={attr}>{attr}</option>
+                                  ))}
+                                </select>
+                                <button
+                                  type="button"
+                                  onClick={() => setIsNodeAttrModalOpen(true)}
+                                  className="text-[10px] text-indigo-600 hover:text-indigo-850 bg-indigo-50 border border-indigo-100 px-2 py-1 rounded-md font-bold cursor-pointer transition-all hover:bg-indigo-100/60"
+                                >
+                                  ⚙️ 管理属性列表
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -690,7 +925,7 @@ export const Settings: React.FC = () => {
                         className={`h-4 w-4 rounded-sm bg-amber-400 cursor-pointer border ${
                           newStepColor === 'yellow' ? 'border-slate-850 shadow-3xs scale-105' : 'border-transparent opacity-50'
                         }`}
-                        title="标准跟进状态"
+                        title="标准跟进状态 (黄色)"
                       />
                       <button
                         type="button"
@@ -698,7 +933,7 @@ export const Settings: React.FC = () => {
                         className={`h-4 w-4 rounded-sm bg-emerald-500 cursor-pointer border ${
                           newStepColor === 'green' ? 'border-slate-850 shadow-3xs scale-105' : 'border-transparent opacity-50'
                         }`}
-                        title="重要推进节点"
+                        title="重要推进节点 (绿色)"
                       />
                       <button
                         type="button"
@@ -706,7 +941,15 @@ export const Settings: React.FC = () => {
                         className={`h-4 w-4 rounded-sm bg-blue-500 cursor-pointer border ${
                           newStepColor === 'blue' ? 'border-slate-850 shadow-3xs scale-105' : 'border-transparent opacity-50'
                         }`}
-                        title="终结归档节点"
+                        title="终结归档节点 (蓝色)"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setNewStepColor('red')}
+                        className={`h-4 w-4 rounded-sm bg-rose-500 cursor-pointer border ${
+                          newStepColor === 'red' ? 'border-slate-850 shadow-3xs scale-105' : 'border-transparent opacity-50'
+                        }`}
+                        title="异常状态节点 (红色)"
                       />
                     </div>
 
@@ -1356,6 +1599,262 @@ export const Settings: React.FC = () => {
                 }`}
               >
                 确认迁移
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Safe Step Deletion & Migration Modal */}
+      {deletingStepInfo && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-xl border border-slate-100 max-w-lg w-full p-6 space-y-4 animate-scale-up">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="font-bold text-slate-800 text-base flex items-center space-x-2">
+                <ShieldAlert size={18} className="text-red-500 animate-pulse" />
+                <span>受影响业务一键安全迁移</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setDeletingStepInfo(null);
+                  setMigrationTargetStepId('');
+                }}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded hover:bg-slate-50 transition-colors cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div className="p-3 bg-red-50 border border-red-100 rounded-lg text-xs text-red-800">
+                ⚠️ 您正在尝试删除节点【<span className="font-bold">{deletingStepInfo.name}</span>】。目前该节点仍有 <span className="font-bold text-red-600">{deletingStepInfo.affected.length}</span> 个活跃业务项目停留，请为这些项目一键指派新节点以防止数据丢失！
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-1.5 font-bold">
+                  受影响业务项目清单：
+                </label>
+                <div className="bg-slate-50 border border-slate-200/60 rounded-lg p-2.5 max-h-36 overflow-y-auto space-y-1.5 text-xs text-slate-600">
+                  {deletingStepInfo.affected.map((item, idx) => (
+                    <div key={idx} className="flex justify-between items-center bg-white p-1.5 rounded border border-slate-150">
+                      <div className="flex items-center space-x-2">
+                        <span className="font-mono bg-slate-100 px-1 py-0.2 rounded text-[10px] text-slate-500 font-bold">
+                          {item.code}
+                        </span>
+                        <span className="font-medium text-slate-700 truncate max-w-[180px] font-bold">{item.name}</span>
+                      </div>
+                      <span className="text-[10px] text-amber-600 bg-amber-50 px-1.5 py-0.2 rounded font-bold border border-amber-100">
+                        当前停留
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-1.5 font-bold">
+                  选择迁往新节点 (一键安全流转)：
+                </label>
+                <select
+                  value={migrationTargetStepId}
+                  onChange={(e) => setMigrationTargetStepId(e.target.value)}
+                  className="w-full px-3 py-2 rounded-md border border-slate-200 text-xs focus:ring-1 focus:ring-blue-100 focus:outline-none font-medium text-slate-700 bg-white"
+                >
+                  {currentWorkflow
+                    .filter(step => step.id !== deletingStepInfo.id)
+                    .map(step => (
+                      <option key={step.id} value={step.id}>
+                        {step.name}
+                      </option>
+                    ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="flex justify-end space-x-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => {
+                  setDeletingStepInfo(null);
+                  setMigrationTargetStepId('');
+                }}
+                className="px-4 py-1.8 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 text-xs font-bold rounded-lg cursor-pointer transition-all"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmMigration}
+                className="px-4 py-1.8 bg-blue-600 hover:bg-blue-700 text-white shadow-3xs text-xs font-bold rounded-lg cursor-pointer transition-all"
+              >
+                🚀 确认一键安全迁移并删除原节点
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Node Attributes Management Modal */}
+      {isNodeAttrModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-xl border border-slate-100 max-w-md w-full p-6 space-y-4 animate-scale-up">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="font-bold text-slate-800 text-sm flex items-center space-x-2">
+                <span>⚙️ 管理流程节点属性</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsNodeAttrModalOpen(false);
+                  setEditingNodeAttrIndex(null);
+                }}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded hover:bg-slate-50 transition-colors cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Inline Add Input */}
+            <div className="space-y-1.5">
+              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest font-bold">
+                新增节点属性：
+              </label>
+              <div className="flex items-center space-x-2">
+                <input
+                  type="text"
+                  placeholder="如: 结算、理货、开票..."
+                  value={newNodeAttrValue}
+                  onChange={(e) => setNewNodeAttrValue(e.target.value)}
+                  className="flex-1 px-3 py-1.8 rounded-lg border border-slate-200 text-xs focus:ring-1 focus:ring-blue-100 focus:outline-none font-medium text-slate-700 bg-white"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      if (newNodeAttrValue.trim()) {
+                        addNodeAttribute(newNodeAttrValue);
+                        setNewNodeAttrValue('');
+                      }
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (newNodeAttrValue.trim()) {
+                      addNodeAttribute(newNodeAttrValue);
+                      setNewNodeAttrValue('');
+                    }
+                  }}
+                  className="px-4 py-1.8 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-lg cursor-pointer transition-all shadow-3xs"
+                >
+                  添加
+                </button>
+              </div>
+            </div>
+
+            {/* Current List */}
+            <div className="space-y-2">
+              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest font-bold">
+                当前属性列表 (共 {nodeAttributes.length} 个)：
+              </label>
+              <div className="border border-slate-100 rounded-lg max-h-56 overflow-y-auto divide-y divide-slate-100 bg-slate-50/30">
+                {nodeAttributes.map((attr, idx) => {
+                  const isEditingThis = editingNodeAttrIndex === idx;
+                  return (
+                    <div key={idx} className="flex items-center justify-between p-2.5 bg-white text-xs text-slate-700 hover:bg-slate-50/50 transition-colors">
+                      {isEditingThis ? (
+                        <div className="flex items-center space-x-1.5 flex-1 mr-2">
+                          <input
+                            type="text"
+                            value={editingNodeAttrValue}
+                            onChange={(e) => setEditingNodeAttrValue(e.target.value)}
+                            className="flex-1 px-2 py-1 rounded border border-blue-400 text-xs focus:outline-none font-bold text-slate-700 bg-white"
+                            autoFocus
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                updateNodeAttribute(attr, editingNodeAttrValue);
+                                setEditingNodeAttrIndex(null);
+                              } else if (e.key === 'Escape') {
+                                setEditingNodeAttrIndex(null);
+                              }
+                            }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              updateNodeAttribute(attr, editingNodeAttrValue);
+                              setEditingNodeAttrIndex(null);
+                            }}
+                            className="p-1 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 rounded font-bold cursor-pointer"
+                            title="保存"
+                          >
+                            <Check size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingNodeAttrIndex(null)}
+                            className="p-1 bg-rose-50 text-rose-600 hover:bg-rose-100 rounded font-bold cursor-pointer"
+                            title="取消"
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex-1 font-bold text-slate-750">{attr}</div>
+                      )}
+
+                      {!isEditingThis && (
+                        <div className="flex items-center space-x-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingNodeAttrIndex(idx);
+                              setEditingNodeAttrValue(attr);
+                            }}
+                            className="p-1 hover:bg-slate-100 text-slate-400 hover:text-blue-600 rounded transition-colors cursor-pointer"
+                            title="编辑重命名"
+                          >
+                            <Edit3 size={13} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (window.confirm(`确定要删除属性【${attr}】吗？删除后所有模板中绑定该属性的节点都将被解除绑定。`)) {
+                                deleteNodeAttribute(attr);
+                              }
+                            }}
+                            className="p-1 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded transition-colors cursor-pointer"
+                            title="删除"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {nodeAttributes.length === 0 && (
+                  <div className="p-8 text-center text-slate-400 text-xs">
+                    暂无任何属性，请在上方进行添加。
+                  </div>
+                )}
+              </div>
+              <p className="text-[10px] text-slate-400 leading-relaxed">
+                * 修改或重命名某一属性时，系统将<b>自动更新并同步</b>所有已绑定该属性的流程节点，无需手动修改。
+              </p>
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsNodeAttrModalOpen(false);
+                  setEditingNodeAttrIndex(null);
+                }}
+                className="px-4 py-1.8 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg cursor-pointer transition-all"
+              >
+                关闭
               </button>
             </div>
           </div>

@@ -11,11 +11,16 @@ export const Dashboard: React.FC = () => {
     bids, 
     preWorkflow, 
     postWorkflow, 
+    postServiceWorkflow,
     bidWorkflow, 
     workflowTemplates,
     workspaceMode,
     currentUser,
-    users
+    users,
+    getProjectStatusName,
+    getContractStatusName,
+    getSettlementStatusName,
+    getBidStatusName
   } = useAppState();
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [selectedItemType, setSelectedItemType] = useState<'project' | 'contract' | 'bid' | null>(null);
@@ -59,53 +64,39 @@ export const Dashboard: React.FC = () => {
   const actionableItems: ActionableItem[] = [];
 
   // Helper to resolve color of a project status
-  const getProjectStatusColor = (statusName: string) => {
-    // 1. Search in custom 'pre' templates
-    const preTemplates = workflowTemplates.filter(t => t.module === 'pre');
-    for (const tpl of preTemplates) {
-      const step = tpl.steps.find(s => s.name === statusName);
-      if (step) return step.color;
-    }
-    // 2. Fall back to preWorkflow
-    const step = preWorkflow.find(s => s.name === statusName);
+  const getProjectStatusColor = (statusName: string, templateId?: string) => {
+    const tpl = (templateId ? workflowTemplates.find(t => t.id === templateId) : null) || 
+                workflowTemplates.find(t => t.module === 'pre' && t.isDefault) ||
+                workflowTemplates.find(t => t.module === 'pre');
+    const steps = tpl?.steps || preWorkflow;
+    const step = steps.find(s => s.id === statusName || s.name === statusName);
     return step ? step.color : 'green';
   };
 
   // Helper to resolve color of a contract status
-  const getContractStatusColor = (statusName: string) => {
-    // 1. Search in custom 'purchase' or 'service' templates
-    const contractTemplates = workflowTemplates.filter(t => t.module === 'purchase' || t.module === 'service');
-    for (const tpl of contractTemplates) {
-      const step = tpl.steps.find(s => s.name === statusName);
-      if (step) return step.color;
-    }
-    // 2. Fall back to postWorkflow
-    const step = postWorkflow.find(s => s.name === statusName);
+  const getContractStatusColor = (statusName: string, templateId?: string, isService?: boolean) => {
+    const moduleType = isService ? 'service' : 'purchase';
+    const tpl = (templateId ? workflowTemplates.find(t => t.id === templateId) : null) || 
+                workflowTemplates.find(t => t.module === moduleType && t.isDefault) ||
+                workflowTemplates.find(t => t.module === moduleType);
+    const steps = tpl?.steps || (isService ? postServiceWorkflow : postWorkflow);
+    const step = steps.find(s => s.id === statusName || s.name === statusName);
     return step ? step.color : 'green';
   };
 
   // Helper to resolve color of a bid status
-  const getBidStatusColor = (statusName: string) => {
-    // 1. Search in custom 'bid' templates
-    const bidTemplates = workflowTemplates.filter(t => t.module === 'bid');
-    for (const tpl of bidTemplates) {
-      const step = tpl.steps.find(s => s.name === statusName);
-      if (step) return step.color;
-    }
-    // 2. Fall back to bidWorkflow
-    const step = bidWorkflow.find(s => s.name === statusName);
+  const getBidStatusColor = (statusName: string, templateId?: string) => {
+    const tpl = (templateId ? workflowTemplates.find(t => t.id === templateId) : null) || 
+                workflowTemplates.find(t => t.module === 'bid' && t.isDefault) ||
+                workflowTemplates.find(t => t.module === 'bid');
+    const steps = tpl?.steps || bidWorkflow;
+    const step = steps.find(s => s.id === statusName || s.name === statusName);
     return step ? step.color : 'green';
   };
 
-  // Derive counts - non-blue status items
-  const totalProjects = filteredProjects.filter(p => {
-    return getProjectStatusColor(p.status) !== 'blue';
-  }).length;
-
-  const totalContracts = filteredContracts.filter(c => {
-    if (c.contractStatus === '已完成' || c.contractStatus === '已终止') return false;
-    return getContractStatusColor(c.status) !== 'blue';
-  }).length;
+  // Derive counts - all items in the filtered lists under current workspace view
+  const totalProjects = filteredProjects.length;
+  const totalContracts = filteredContracts.length;
 
   // Let's count statuses by color across all activities
   let yellowCount = 0;
@@ -115,7 +106,7 @@ export const Dashboard: React.FC = () => {
 
   // 1. Scan Projects
   filteredProjects.forEach(p => {
-    const col = getProjectStatusColor(p.status);
+    const col = getProjectStatusColor(p.status, p.templateId);
     if (col === 'yellow') {
       yellowCount++;
       actionableItems.push({
@@ -141,12 +132,10 @@ export const Dashboard: React.FC = () => {
 
   // 2. Scan Contracts and Settlement Batches
   filteredContracts.forEach(c => {
-    if (c.contractStatus === '已完成' || c.contractStatus === '已终止') return;
-
     if (c.isMultiSettlement && c.settlements && c.settlements.length > 0) {
       // For multi-settlement contract, we evaluate each active settlement batch status
       c.settlements.forEach(s => {
-        const col = getContractStatusColor(s.status);
+        const col = getContractStatusColor(s.status, c.templateId, c.contractType === 'service');
         if (col === 'yellow') {
           yellowCount++;
           actionableItems.push({
@@ -172,7 +161,7 @@ export const Dashboard: React.FC = () => {
       });
     } else {
       // Normal contract
-      const col = getContractStatusColor(c.status);
+      const col = getContractStatusColor(c.status, c.templateId, c.contractType === 'service');
       if (col === 'yellow') {
         yellowCount++;
         actionableItems.push({
@@ -188,7 +177,7 @@ export const Dashboard: React.FC = () => {
           owners: c.owners
         });
       } else if (col === 'green') {
-        greenCount++; // Corrected: Count green as greenCount
+        greenCount++; // Count green as greenCount
       } else if (col === 'blue') {
         blueCount++;
       } else if (col === 'red') {
@@ -199,8 +188,7 @@ export const Dashboard: React.FC = () => {
 
   // 3. Scan Bids (Bidding Projects)
   filteredBids.forEach(b => {
-    if (b.resultStatus === '已中标' || b.resultStatus === '未中标' || b.resultStatus === '已终止') return;
-    const col = getBidStatusColor(b.status);
+    const col = getBidStatusColor(b.status, b.templateId);
     if (col === 'yellow') {
       yellowCount++;
       actionableItems.push({
@@ -251,6 +239,14 @@ export const Dashboard: React.FC = () => {
   };
 
   const activeUserObj = users.find(u => u.email.toLowerCase() === currentUser.toLowerCase()) || MEMBERS[0];
+
+  const getItemStatusName = (item: ActionableItem) => {
+    if (item.type === 'project') return getProjectStatusName(item.status);
+    if (item.type === 'contract') return getContractStatusName(item.status);
+    if (item.type === 'settlement') return getSettlementStatusName(item.status);
+    if (item.type === 'bid') return getBidStatusName(item.status);
+    return item.status;
+  };
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto animate-fade-in">
@@ -409,7 +405,7 @@ export const Dashboard: React.FC = () => {
                         {item.ship}
                       </span>
                       <span className="px-2 py-0.5 bg-amber-50 text-amber-700 text-[10px] font-semibold rounded border border-amber-100/80 flex items-center gap-0.5">
-                        🟡 {item.status}
+                        🟡 {getItemStatusName(item)}
                       </span>
                       {item.isUrgent && (
                         <span className="px-1.5 py-0.5 bg-rose-50 text-rose-600 text-[10px] font-bold rounded border border-rose-100/80 flex items-center gap-0.5">

@@ -56,7 +56,11 @@ export const ItemDetailsModal: React.FC<ItemDetailsModalProps> = ({ itemId, type
     currentUser,
     addChecklistTask,
     workspaceMode,
-    users
+    users,
+    getProjectStatusName,
+    getContractStatusName,
+    getSettlementStatusName,
+    getBidStatusName
   } = useAppState();
 
   const [newTag, setNewTag] = useState('');
@@ -1001,26 +1005,15 @@ export const ItemDetailsModal: React.FC<ItemDetailsModalProps> = ({ itemId, type
               </div>
 
               {/* Members Selection Checklist */}
-              {workspaceMode === 'personal' ? (
-                <div className="space-y-2">
-                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                    项目归属 (个人工作台):
-                  </label>
-                  <div className="text-xs text-slate-500 bg-slate-100/50 rounded-lg p-2.5 border border-slate-200 border-dashed">
-                    🔒 个人工作台模式下，项目默认归属于您 <b>({MEMBERS.find(m => m.email === currentUser)?.name || currentUser})</b> 且置灰不可修改。
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                    归属人选择 (可多选，支持检索):
-                  </label>
-                  <MemberSelect
-                    selectedEmails={currentItem?.owners || []}
-                    onChange={(updatedOwners) => handleSaveField({ owners: updatedOwners })}
-                  />
-                </div>
-              )}
+              <div className="space-y-2">
+                <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                  归属人选择 (可多选，支持检索):
+                </label>
+                <MemberSelect
+                  selectedEmails={currentItem?.owners || []}
+                  onChange={(updatedOwners) => handleSaveField({ owners: updatedOwners })}
+                />
+              </div>
 
               {/* Inline Collaboration Notification panel */}
               {showCollaborationPanel && (
@@ -1115,7 +1108,7 @@ export const ItemDetailsModal: React.FC<ItemDetailsModalProps> = ({ itemId, type
                         else if (step.color === 'red') indicatorStr = '🔴 ';
                         
                         return (
-                          <option key={step.id} value={step.name}>
+                          <option key={step.id} value={step.id}>
                             {indicatorStr}{step.name}
                           </option>
                         );
@@ -1288,10 +1281,17 @@ export const ItemDetailsModal: React.FC<ItemDetailsModalProps> = ({ itemId, type
                             <select
                               value={batch.status}
                               onChange={(e) => {
-                                const prevStatus = batch.status;
-                                const newStatus = e.target.value;
-                                const currentIndex = activeSteps.findIndex(s => s.name === prevStatus);
-                                const nextIndex = activeSteps.findIndex(s => s.name === newStatus);
+                                const prevStatusId = batch.status;
+                                const newStatusId = e.target.value;
+
+                                const prevStep = activeSteps.find(s => s.id === prevStatusId || s.name === prevStatusId);
+                                const newStep = activeSteps.find(s => s.id === newStatusId || s.name === newStatusId);
+
+                                const prevStatusName = prevStep ? prevStep.name : prevStatusId;
+                                const newStatusName = newStep ? newStep.name : newStatusId;
+
+                                const currentIndex = activeSteps.findIndex(s => s.id === prevStatusId || s.name === prevStatusId);
+                                const nextIndex = activeSteps.findIndex(s => s.id === newStatusId || s.name === newStatusId);
                                 let changeType = '流程变更';
                                 if (currentIndex !== -1 && nextIndex !== -1) {
                                   if (nextIndex > currentIndex) changeType = '流程推进';
@@ -1302,14 +1302,14 @@ export const ItemDetailsModal: React.FC<ItemDetailsModalProps> = ({ itemId, type
                                   id: `hist-batch-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
                                   time: formatDateTime(new Date()),
                                   type: changeType,
-                                  fromStep: prevStatus,
-                                  toStep: newStatus,
+                                  fromStep: prevStatusName,
+                                  toStep: newStatusName,
                                   operator: DEFAULT_OPERATOR,
-                                  comment: `结算批次【${batch.name}】状态从【${prevStatus}】变更至【${newStatus}】`
+                                  comment: `结算批次【${batch.name}】状态从【${prevStatusName}】变更至【${newStatusName}】`
                                 };
                                 
                                 const updatedHistory = [...(batch.history || []), newHistRecord];
-                                const updated = settlements.map(b => b.id === batch.id ? { ...b, status: newStatus, history: updatedHistory } : b);
+                                const updated = settlements.map(b => b.id === batch.id ? { ...b, status: newStatusId, history: updatedHistory } : b);
                                 setSettlements(updated);
                                 handleSaveField({ settlements: updated });
                               }}
@@ -1320,7 +1320,7 @@ export const ItemDetailsModal: React.FC<ItemDetailsModalProps> = ({ itemId, type
                                 const hasEmoji = /^[^\w\s\u4e00-\u9fa5]{1,2}\s/.test(step.name);
                                 const displayName = hasEmoji ? step.name : `${colorEmoji} ${step.name}`;
                                 return (
-                                  <option key={step.id} value={step.name}>
+                                  <option key={step.id} value={step.id}>
                                     {displayName}
                                   </option>
                                 );
@@ -1575,7 +1575,7 @@ export const ItemDetailsModal: React.FC<ItemDetailsModalProps> = ({ itemId, type
                       <option value="">-- 未关联任何合同 --</option>
                       {eligibleContracts.map(c => (
                         <option key={c.id} value={c.id}>
-                          {c.name} ({c.status})
+                          {c.name} ({getContractStatusName(c.status)})
                         </option>
                       ))}
                     </select>
@@ -1583,7 +1583,7 @@ export const ItemDetailsModal: React.FC<ItemDetailsModalProps> = ({ itemId, type
                       <div className="bg-slate-50 border border-slate-100 rounded-lg p-3 text-xs space-y-1">
                         <div className="font-medium text-slate-700 flex items-center justify-between">
                           <span>关联详情：{connectedContract.name}</span>
-                          <span className="text-blue-600 font-semibold">{connectedContract.status}</span>
+                          <span className="text-blue-600 font-semibold">{getContractStatusName(connectedContract.status)}</span>
                         </div>
                       </div>
                     )}
@@ -1888,7 +1888,7 @@ export const ItemDetailsModal: React.FC<ItemDetailsModalProps> = ({ itemId, type
                     <option value="">-- 未关联任何合同 --</option>
                     {eligibleContracts.map(c => (
                       <option key={c.id} value={c.id}>
-                        {c.name} ({c.status})
+                        {c.name} ({getContractStatusName(c.status)})
                       </option>
                     ))}
                   </select>
@@ -1896,7 +1896,7 @@ export const ItemDetailsModal: React.FC<ItemDetailsModalProps> = ({ itemId, type
                     <div className="bg-slate-50 border border-slate-100 rounded-lg p-3 text-xs space-y-1">
                       <div className="font-medium text-slate-700 flex items-center justify-between">
                         <span>关联详情：{connectedContract.name}</span>
-                        <span className="text-blue-600 font-semibold">{connectedContract.status}</span>
+                        <span className="text-blue-600 font-semibold">{getContractStatusName(connectedContract.status)}</span>
                       </div>
                     </div>
                   )}
@@ -1927,7 +1927,7 @@ export const ItemDetailsModal: React.FC<ItemDetailsModalProps> = ({ itemId, type
                           </p>
                         </div>
                         <div className="flex items-center space-x-2">
-                          <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-100 font-semibold text-[10px]">{p.status}</span>
+                          <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-100 font-semibold text-[10px]">{getProjectStatusName(p.status)}</span>
                           <button
                             type="button"
                             onClick={() => associateProjectToContract(p.id, undefined)}
@@ -2014,7 +2014,7 @@ export const ItemDetailsModal: React.FC<ItemDetailsModalProps> = ({ itemId, type
                               </div>
                             </div>
                             <div className="flex items-center space-x-1.5">
-                              <span className="px-1.5 py-0.2 rounded bg-amber-50 text-amber-600 border border-amber-100 text-[9px] font-semibold">{p.status}</span>
+                              <span className="px-1.5 py-0.2 rounded bg-amber-50 text-amber-600 border border-amber-100 text-[9px] font-semibold">{getProjectStatusName(p.status)}</span>
                               <span className="text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity text-[10px] font-bold">关联 ↗</span>
                             </div>
                           </button>
