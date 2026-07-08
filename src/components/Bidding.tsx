@@ -596,7 +596,7 @@ export const Bidding: React.FC = () => {
                            statusColor === 'green' ? '🟢' :
                            statusColor === 'blue' ? '🔵' : '🔴'}
                         </span>
-                        {getBidStatusName(bid.status)}
+                        {getBidStatusName(bid)}
                       </span>
                     </div>
 

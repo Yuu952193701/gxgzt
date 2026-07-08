@@ -60,6 +60,8 @@ export const Dashboard: React.FC = () => {
     isUrgent: boolean;
     dueDate?: string;
     owners?: string[];
+    templateId?: string;
+    isService?: boolean;
   }
   const actionableItems: ActionableItem[] = [];
 
@@ -119,7 +121,8 @@ export const Dashboard: React.FC = () => {
         remark: p.remark,
         isUrgent: p.isUrgent,
         dueDate: p.dueDate,
-        owners: p.owners
+        owners: p.owners,
+        templateId: p.templateId
       });
     } else if (col === 'green') {
       greenCount++;
@@ -149,7 +152,9 @@ export const Dashboard: React.FC = () => {
             remark: s.remark || c.remark,
             isUrgent: c.isUrgent,
             dueDate: s.dueDate || c.dueDate,
-            owners: c.owners
+            owners: c.owners,
+            templateId: c.templateId,
+            isService: c.contractType === 'service'
           });
         } else if (col === 'green') {
           greenCount++;
@@ -174,7 +179,9 @@ export const Dashboard: React.FC = () => {
           remark: c.remark,
           isUrgent: c.isUrgent,
           dueDate: c.dueDate,
-          owners: c.owners
+          owners: c.owners,
+          templateId: c.templateId,
+          isService: c.contractType === 'service'
         });
       } else if (col === 'green') {
         greenCount++; // Count green as greenCount
@@ -201,7 +208,8 @@ export const Dashboard: React.FC = () => {
         remark: b.remark,
         isUrgent: b.isUrgent,
         dueDate: b.dueDate,
-        owners: b.owners
+        owners: b.owners,
+        templateId: b.templateId
       });
     } else if (col === 'green') {
       greenCount++;
@@ -241,10 +249,10 @@ export const Dashboard: React.FC = () => {
   const activeUserObj = users.find(u => u.email.toLowerCase() === currentUser.toLowerCase()) || MEMBERS[0];
 
   const getItemStatusName = (item: ActionableItem) => {
-    if (item.type === 'project') return getProjectStatusName(item.status);
-    if (item.type === 'contract') return getContractStatusName(item.status);
-    if (item.type === 'settlement') return getSettlementStatusName(item.status);
-    if (item.type === 'bid') return getBidStatusName(item.status);
+    if (item.type === 'project') return getProjectStatusName({ status: item.status, templateId: item.templateId } as any);
+    if (item.type === 'contract') return getContractStatusName({ status: item.status, templateId: item.templateId, contractType: item.isService ? 'service' : 'purchase' } as any);
+    if (item.type === 'settlement') return getSettlementStatusName(item.status, item.templateId, item.isService);
+    if (item.type === 'bid') return getBidStatusName({ status: item.status, templateId: item.templateId } as any);
     return item.status;
   };
 

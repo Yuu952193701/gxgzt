@@ -452,7 +452,7 @@ export const PreProcurement: React.FC = () => {
                            statusColor === 'green' ? '🟢' :
                            statusColor === 'blue' ? '🔵' : '🔴'}
                         </span>
-                        {getProjectStatusName(project.status)}
+                        {getProjectStatusName(project)}
                       </span>
 
                       {/* 3. Urgency alert tag */}

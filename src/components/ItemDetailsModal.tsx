@@ -1575,7 +1575,7 @@ export const ItemDetailsModal: React.FC<ItemDetailsModalProps> = ({ itemId, type
                       <option value="">-- 未关联任何合同 --</option>
                       {eligibleContracts.map(c => (
                         <option key={c.id} value={c.id}>
-                          {c.name} ({getContractStatusName(c.status)})
+                          {c.name} ({getContractStatusName(c)})
                         </option>
                       ))}
                     </select>
@@ -1583,7 +1583,7 @@ export const ItemDetailsModal: React.FC<ItemDetailsModalProps> = ({ itemId, type
                       <div className="bg-slate-50 border border-slate-100 rounded-lg p-3 text-xs space-y-1">
                         <div className="font-medium text-slate-700 flex items-center justify-between">
                           <span>关联详情：{connectedContract.name}</span>
-                          <span className="text-blue-600 font-semibold">{getContractStatusName(connectedContract.status)}</span>
+                          <span className="text-blue-600 font-semibold">{getContractStatusName(connectedContract)}</span>
                         </div>
                       </div>
                     )}
@@ -1888,7 +1888,7 @@ export const ItemDetailsModal: React.FC<ItemDetailsModalProps> = ({ itemId, type
                     <option value="">-- 未关联任何合同 --</option>
                     {eligibleContracts.map(c => (
                       <option key={c.id} value={c.id}>
-                        {c.name} ({getContractStatusName(c.status)})
+                        {c.name} ({getContractStatusName(c)})
                       </option>
                     ))}
                   </select>
@@ -1896,7 +1896,7 @@ export const ItemDetailsModal: React.FC<ItemDetailsModalProps> = ({ itemId, type
                     <div className="bg-slate-50 border border-slate-100 rounded-lg p-3 text-xs space-y-1">
                       <div className="font-medium text-slate-700 flex items-center justify-between">
                         <span>关联详情：{connectedContract.name}</span>
-                        <span className="text-blue-600 font-semibold">{getContractStatusName(connectedContract.status)}</span>
+                        <span className="text-blue-600 font-semibold">{getContractStatusName(connectedContract)}</span>
                       </div>
                     </div>
                   )}
@@ -1927,7 +1927,7 @@ export const ItemDetailsModal: React.FC<ItemDetailsModalProps> = ({ itemId, type
                           </p>
                         </div>
                         <div className="flex items-center space-x-2">
-                          <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-100 font-semibold text-[10px]">{getProjectStatusName(p.status)}</span>
+                          <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-100 font-semibold text-[10px]">{getProjectStatusName(p)}</span>
                           <button
                             type="button"
                             onClick={() => associateProjectToContract(p.id, undefined)}
@@ -2014,7 +2014,7 @@ export const ItemDetailsModal: React.FC<ItemDetailsModalProps> = ({ itemId, type
                               </div>
                             </div>
                             <div className="flex items-center space-x-1.5">
-                              <span className="px-1.5 py-0.2 rounded bg-amber-50 text-amber-600 border border-amber-100 text-[9px] font-semibold">{getProjectStatusName(p.status)}</span>
+                              <span className="px-1.5 py-0.2 rounded bg-amber-50 text-amber-600 border border-amber-100 text-[9px] font-semibold">{getProjectStatusName(p)}</span>
                               <span className="text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity text-[10px] font-bold">关联 ↗</span>
                             </div>
                           </button>

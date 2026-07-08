@@ -32,7 +32,8 @@ export const PostProcurement: React.FC<PostProcurementProps> = ({ contractType =
     currentUser,
     users,
     getContractStatusName,
-    getProjectStatusName
+    getProjectStatusName,
+    getSettlementStatusName
   } = useAppState();
 
   const currentWorkflow = contractType === 'service' ? postServiceWorkflow : postWorkflow;
@@ -712,7 +713,7 @@ export const PostProcurement: React.FC<PostProcurementProps> = ({ contractType =
                              statusColor === 'green' ? '🟢' :
                              statusColor === 'blue' ? '🔵' : '🔴'}
                           </span>
-                          {getContractStatusName(contract.status)}
+                          {getContractStatusName(contract)}
                         </span>
                       ) : (
                         <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-3xs">
@@ -843,7 +844,7 @@ export const PostProcurement: React.FC<PostProcurementProps> = ({ contractType =
                                           bCol === 'blue' ? 'bg-blue-50 text-blue-800 border-blue-200' :
                                           'bg-red-50 text-red-800 border-red-200'
                                         }`}>
-                                          {getContractStatusName(s.status)}
+                                          {getSettlementStatusName(s, contract.templateId, contract.contractType === 'service')}
                                         </span>
                                         {/* Batch Amount Tag */}
                                         {s.amount && (

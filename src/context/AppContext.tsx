@@ -71,10 +71,10 @@ interface AppContextProps {
   setDefaultWorkflowTemplate: (id: string) => void;
   
   // Status name resolver helpers
-  getProjectStatusName: (p: DemandProject) => string;
-  getContractStatusName: (c: Contract) => string;
-  getSettlementStatusName: (s: SettlementBatch, contractTemplateId?: string, isService?: boolean) => string;
-  getBidStatusName: (b: BidProject) => string;
+  getProjectStatusName: (p: DemandProject | string) => string;
+  getContractStatusName: (c: Contract | string) => string;
+  getSettlementStatusName: (s: SettlementBatch | string, contractTemplateId?: string, isService?: boolean) => string;
+  getBidStatusName: (b: BidProject | string) => string;
   
   // Global Tags catalog for autocomplete suggestion
   allTags: string[];
@@ -155,6 +155,12 @@ interface AppContextProps {
   addSupplierCategory: (name: string) => SupplierCategory;
   updateSupplierCategory: (id: string, name: string) => void;
   deleteSupplierCategory: (id: string) => void;
+
+  // Node Attributes
+  nodeAttributes: string[];
+  addNodeAttribute: (attr: string) => void;
+  deleteNodeAttribute: (attr: string) => void;
+  updateNodeAttribute: (oldAttr: string, newAttr: string) => void;
 }
 
 const AppContext = createContext<AppContextProps | undefined>(undefined);
@@ -1455,6 +1461,62 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     addSystemLog(`[工作流模板] 已将模板 ID [${id}] 设为默认模板`);
   };
 
+  // Node Attributes state and actions
+  const [nodeAttributes, setNodeAttributes] = useState<string[]>(() => {
+    const saved = localStorage.getItem('p_workbench_node_attributes');
+    if (saved) return JSON.parse(saved);
+    return ['登记', '审批', '对账', '寄出', '付款', '结算', '完成'];
+  });
+
+  useEffect(() => {
+    localStorage.setItem('p_workbench_node_attributes', JSON.stringify(nodeAttributes));
+    if (window.electronAPI) {
+      window.electronAPI.saveData('nodeAttributes', nodeAttributes).catch(err => console.error(err));
+    }
+  }, [nodeAttributes]);
+
+  const addNodeAttribute = (attr: string) => {
+    const trimmed = attr.trim();
+    if (!trimmed) return;
+    setNodeAttributes(prev => {
+      if (prev.includes(trimmed)) return prev;
+      addSystemLog(`[节点属性] 新增了属性: [${trimmed}]`);
+      return [...prev, trimmed];
+    });
+  };
+
+  const deleteNodeAttribute = (attr: string) => {
+    setNodeAttributes(prev => {
+      const filtered = prev.filter(a => a !== attr);
+      addSystemLog(`[节点属性] 删除了属性: [${attr}]`);
+      return filtered;
+    });
+  };
+
+  const updateNodeAttribute = (oldAttr: string, newAttr: string) => {
+    const trimmed = newAttr.trim();
+    if (!trimmed || oldAttr === trimmed) return;
+    setNodeAttributes(prev => {
+      const idx = prev.indexOf(oldAttr);
+      if (idx === -1) return prev;
+      const copy = [...prev];
+      copy[idx] = trimmed;
+      addSystemLog(`[节点属性] 更新了属性: [${oldAttr}] → [${trimmed}]`);
+      return copy;
+    });
+    setWorkflowTemplates(prev => {
+      return prev.map(t => ({
+        ...t,
+        steps: t.steps.map(s => {
+          if (s.nodeAttribute === oldAttr) {
+            return { ...s, nodeAttribute: trimmed };
+          }
+          return s;
+        })
+      }));
+    });
+  };
+
   // Persist transitions (dual synchronization)
   useEffect(() => {
     localStorage.setItem('p_workbench_workflow_templates', JSON.stringify(workflowTemplates));
@@ -1481,40 +1543,100 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [workflowTemplates]);
 
-  const getProjectStatusName = (p: DemandProject): string => {
-    const tpl = workflowTemplates.find(t => t.id === p.templateId) || 
+  const getProjectStatusName = (p: DemandProject | string): string => {
+    if (!p) return '';
+    const statusVal = typeof p === 'string' ? p : p.status;
+    const templateId = typeof p === 'string' ? undefined : p.templateId;
+    
+    const tpl = (templateId ? workflowTemplates.find(t => t.id === templateId) : null) || 
                 workflowTemplates.find(t => t.module === 'pre' && t.isDefault) ||
                 workflowTemplates.find(t => t.module === 'pre');
     const steps = tpl?.steps || preWorkflow;
-    const step = steps.find(s => s.id === p.status) || steps.find(s => s.name === p.status);
-    return step ? step.name : p.status;
+    let step = steps.find(s => s.id === statusVal || s.name === statusVal);
+    
+    if (!step && typeof p === 'string') {
+      for (const t of workflowTemplates.filter(t => t.module === 'pre')) {
+        step = t.steps.find(s => s.id === statusVal || s.name === statusVal);
+        if (step) break;
+      }
+    }
+    
+    return step ? step.name : statusVal;
   };
 
-  const getContractStatusName = (c: Contract): string => {
-    const tpl = workflowTemplates.find(t => t.id === c.templateId) || 
-                workflowTemplates.find(t => t.module === (c.contractType === 'service' ? 'service' : 'purchase') && t.isDefault) ||
-                workflowTemplates.find(t => t.module === (c.contractType === 'service' ? 'service' : 'purchase'));
-    const steps = tpl?.steps || (c.contractType === 'service' ? postServiceWorkflow : postWorkflow);
-    const step = steps.find(s => s.id === c.status) || steps.find(s => s.name === c.status);
-    return step ? step.name : c.status;
+  const getContractStatusName = (c: Contract | string): string => {
+    if (!c) return '';
+    const statusVal = typeof c === 'string' ? c : c.status;
+    const templateId = typeof c === 'string' ? undefined : c.templateId;
+    const contractType = typeof c === 'string' ? undefined : c.contractType;
+    
+    const moduleType = contractType === 'service' ? 'service' : 'purchase';
+    const tpl = (templateId ? workflowTemplates.find(t => t.id === templateId) : null) || 
+                workflowTemplates.find(t => t.module === moduleType && t.isDefault) ||
+                workflowTemplates.find(t => t.module === moduleType) ||
+                workflowTemplates.find(t => t.module === 'purchase');
+    const steps = tpl?.steps || (contractType === 'service' ? postServiceWorkflow : postWorkflow);
+    let step = steps.find(s => s.id === statusVal || s.name === statusVal);
+    
+    if (!step && typeof c === 'string') {
+      for (const t of workflowTemplates.filter(t => t.module === 'purchase' || t.module === 'service')) {
+        step = t.steps.find(s => s.id === statusVal || s.name === statusVal);
+        if (step) break;
+      }
+      if (!step) {
+        step = postWorkflow.find(s => s.id === statusVal || s.name === statusVal) ||
+               postServiceWorkflow.find(s => s.id === statusVal || s.name === statusVal);
+      }
+    }
+    
+    return step ? step.name : statusVal;
   };
 
-  const getSettlementStatusName = (s: SettlementBatch, contractTemplateId?: string, isService?: boolean): string => {
-    const tpl = workflowTemplates.find(t => t.id === contractTemplateId) || 
+  const getSettlementStatusName = (s: SettlementBatch | string, contractTemplateId?: string, isService?: boolean): string => {
+    if (!s) return '';
+    const statusVal = typeof s === 'string' ? s : s.status;
+    const tpl = (contractTemplateId ? workflowTemplates.find(t => t.id === contractTemplateId) : null) || 
                 workflowTemplates.find(t => t.module === (isService ? 'service' : 'purchase') && t.isDefault) ||
                 workflowTemplates.find(t => t.module === (isService ? 'service' : 'purchase'));
     const steps = tpl?.steps || (isService ? postServiceWorkflow : postWorkflow);
-    const step = steps.find(item => item.id === s.status) || steps.find(item => item.name === s.status);
-    return step ? step.name : s.status;
+    let step = steps.find(item => item.id === statusVal || item.name === statusVal);
+    
+    if (!step && typeof s === 'string') {
+      for (const t of workflowTemplates.filter(t => t.module === 'purchase' || t.module === 'service')) {
+        step = t.steps.find(item => item.id === statusVal || item.name === statusVal);
+        if (step) break;
+      }
+      if (!step) {
+        step = postWorkflow.find(item => item.id === statusVal || item.name === statusVal) ||
+               postServiceWorkflow.find(item => item.id === statusVal || item.name === statusVal);
+      }
+    }
+    
+    return step ? step.name : statusVal;
   };
 
-  const getBidStatusName = (b: BidProject): string => {
-    const tpl = workflowTemplates.find(t => t.id === b.templateId) || 
+  const getBidStatusName = (b: BidProject | string): string => {
+    if (!b) return '';
+    const statusVal = typeof b === 'string' ? b : b.status;
+    const templateId = typeof b === 'string' ? undefined : b.templateId;
+    
+    const tpl = (templateId ? workflowTemplates.find(t => t.id === templateId) : null) || 
                 workflowTemplates.find(t => t.module === 'bid' && t.isDefault) ||
                 workflowTemplates.find(t => t.module === 'bid');
     const steps = tpl?.steps || bidWorkflow;
-    const step = steps.find(s => s.id === b.status) || steps.find(s => s.name === b.status);
-    return step ? step.name : b.status;
+    let step = steps.find(s => s.id === statusVal || s.name === statusVal);
+    
+    if (!step && typeof b === 'string') {
+      for (const t of workflowTemplates.filter(t => t.module === 'bid')) {
+        step = t.steps.find(s => s.id === statusVal || s.name === statusVal);
+        if (step) break;
+      }
+      if (!step) {
+        step = bidWorkflow.find(s => s.id === statusVal || s.name === statusVal);
+      }
+    }
+    
+    return step ? step.name : statusVal;
   };
 
   // Run on mount to automatically migrate old name-based workflow statuses to ID-based statuses
@@ -2548,6 +2670,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateWorkflowTemplate,
         duplicateWorkflowTemplate,
         setDefaultWorkflowTemplate,
+        nodeAttributes,
+        addNodeAttribute,
+        deleteNodeAttribute,
+        updateNodeAttribute,
         allTags,
         addGlobalTag,
         checklistTasks,

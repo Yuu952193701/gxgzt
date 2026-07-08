@@ -1,9 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useAppState } from '../context/AppContext';
-import { WorkflowStep, ColorState, StepAttribute } from '../types';
+import { WorkflowStep, ColorState } from '../types';
 import { DEFAULT_PRE_STEPS, DEFAULT_POST_STEPS, DEFAULT_POST_SERVICE_STEPS, DEFAULT_BID_STEPS } from '../data';
 import { formatDateTime } from '../utils/time';
-import { Plus, Trash2, GripVertical, RefreshCw, Eye, Edit3, Settings2, Database, Download, Upload, RotateCcw, AlertTriangle, FileCheck, Terminal, ShieldAlert, FolderOpen, Tag, ExternalLink, RefreshCw as SpinIcon, Copy, Star, X, User, Users } from 'lucide-react';
+import { Plus, Trash2, GripVertical, RefreshCw, Eye, Edit3, Settings2, Database, Download, Upload, RotateCcw, AlertTriangle, FileCheck, Terminal, ShieldAlert, FolderOpen, Tag, ExternalLink, RefreshCw as SpinIcon, Copy, Star, X, User, Users, ChevronDown, Check } from 'lucide-react';
 
 export const Settings: React.FC = () => {
   const {
@@ -45,6 +45,10 @@ export const Settings: React.FC = () => {
     updateWorkflowTemplate,
     duplicateWorkflowTemplate,
     setDefaultWorkflowTemplate,
+    nodeAttributes,
+    addNodeAttribute,
+    deleteNodeAttribute,
+    updateNodeAttribute,
     currentUser,
     users,
     updateUserProfile,
@@ -94,11 +98,17 @@ export const Settings: React.FC = () => {
   // Drag and drop states for workflow sorting
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
-  const [expandedStepIds, setExpandedStepIds] = useState<Record<string, boolean>>({});
 
   // Custom modals state to replace browser prompts
   const [isCreateTemplateModalOpen, setIsCreateTemplateModalOpen] = useState(false);
   const [newTemplateName, setNewTemplateName] = useState('');
+
+  // Node attributes UI states
+  const [expandedStepIds, setExpandedStepIds] = useState<Record<string, boolean>>({});
+  const [isNodeAttrModalOpen, setIsNodeAttrModalOpen] = useState(false);
+  const [editingNodeAttrIndex, setEditingNodeAttrIndex] = useState<number | null>(null);
+  const [editingNodeAttrValue, setEditingNodeAttrValue] = useState('');
+  const [newNodeAttrValue, setNewNodeAttrValue] = useState('');
 
   const [isRenameTemplateModalOpen, setIsRenameTemplateModalOpen] = useState(false);
   const [renameTemplateTargetId, setRenameTemplateTargetId] = useState<string | null>(null);
@@ -439,10 +449,10 @@ export const Settings: React.FC = () => {
     handleUpdate(updated);
   };
 
-  // Update custom stage attribute
-  const handleChangeAttribute = (index: number, newAttr: StepAttribute) => {
+  // 6. Bind Node Attribute to a step
+  const handleBindNodeAttribute = (index: number, attr: string) => {
     const updated = [...currentWorkflow];
-    updated[index] = { ...updated[index], attribute: newAttr };
+    updated[index] = { ...updated[index], nodeAttribute: attr || undefined };
     handleUpdate(updated);
   };
 
@@ -729,10 +739,10 @@ export const Settings: React.FC = () => {
                   </span>
                 </div>
 
-                <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+                <div className="space-y-2.5 max-h-[420px] overflow-y-auto pr-1">
                   {currentWorkflow.map((step, index) => {
                     const matchesColor = step.color;
-                    const isExpanded = !!expandedStepIds[step.id];
+                    const isExpanded = expandedStepIds[step.id] || false;
                     return (
                       <div
                         key={step.id}
@@ -741,7 +751,7 @@ export const Settings: React.FC = () => {
                         onDragOver={(e) => handleDragOver(e, index)}
                         onDragEnd={handleDragEnd}
                         onDrop={(e) => handleDrop(e, index)}
-                        className={`bg-white border p-3 rounded-lg shadow-3xs flex flex-col group hover:border-slate-300 hover:shadow-2xs transition-all animate-fade-in ${
+                        className={`bg-white border rounded-lg shadow-3xs flex flex-col hover:border-slate-300 hover:shadow-2xs transition-all animate-fade-in ${
                           draggedIndex === index 
                             ? 'opacity-40 border-dashed border-blue-400 bg-blue-50/20' 
                             : dragOverIndex === index
@@ -749,7 +759,8 @@ export const Settings: React.FC = () => {
                             : 'border-slate-200/70'
                         }`}
                       >
-                        <div className="flex items-center justify-between w-full">
+                        {/* Upper row: main details and actions */}
+                        <div className="p-3 flex items-center justify-between gap-2">
                           <div className="flex items-center space-x-3 flex-1 min-w-0">
                             {/* Drag Handle */}
                             <div 
@@ -768,19 +779,41 @@ export const Settings: React.FC = () => {
                               'bg-rose-500'
                             }`} />
 
-                            <input
-                              type="text"
-                              value={step.name}
-                              draggable={false}
-                              onDragStart={(e) => e.stopPropagation()}
-                              onChange={(e) => handleRenameStep(index, e.target.value)}
-                              className="font-bold text-slate-700 text-sm focus:border-blue-500 focus:outline-none border-b border-transparent hover:border-slate-300 pb-0.5 flex-1 max-w-xs transition-colors"
-                              placeholder="输入新步骤名称..."
-                            />
+                            <div className="flex flex-col flex-1 min-w-0">
+                              <input
+                                type="text"
+                                value={step.name}
+                                draggable={false}
+                                onDragStart={(e) => e.stopPropagation()}
+                                onChange={(e) => handleRenameStep(index, e.target.value)}
+                                className="font-bold text-slate-700 text-sm focus:border-blue-500 focus:outline-none border-b border-transparent hover:border-slate-300 pb-0.5 w-full max-w-xs transition-colors"
+                                placeholder="输入新步骤名称..."
+                              />
+                              {step.nodeAttribute && (
+                                <span className="text-[10px] text-indigo-600 bg-indigo-50 border border-indigo-100 px-1.5 py-0.2 rounded font-medium self-start mt-1 flex items-center space-x-0.5 animate-pulse">
+                                  <span>🏷️ 流程节点属性:</span>
+                                  <span className="font-bold">{step.nodeAttribute}</span>
+                                </span>
+                              )}
+                            </div>
                           </div>
 
                           {/* Actions bar for workflow config */}
-                          <div className="flex items-center space-x-2.5" draggable={false} onDragStart={(e) => e.stopPropagation()}>
+                          <div className="flex items-center space-x-2" draggable={false} onDragStart={(e) => e.stopPropagation()}>
+                            {/* Advanced Setting Button */}
+                            <button
+                              type="button"
+                              onClick={() => setExpandedStepIds(prev => ({ ...prev, [step.id]: !prev[step.id] }))}
+                              className={`text-[11px] px-2 py-1 rounded border transition-all flex items-center space-x-0.5 cursor-pointer font-bold ${
+                                isExpanded
+                                  ? 'bg-blue-50 text-blue-600 border-blue-200 shadow-3xs'
+                                  : 'text-slate-500 hover:text-blue-600 border-slate-200/60 bg-white hover:bg-slate-50'
+                              }`}
+                            >
+                              <span>高级设置</span>
+                              <ChevronDown size={11} className={`transform transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
+                            </button>
+
                             {/* Color selection circles buttons */}
                             <div className="hidden md:flex items-center space-x-1 border border-slate-100 rounded-md p-0.5 bg-slate-50/50">
                               <button
@@ -825,24 +858,6 @@ export const Settings: React.FC = () => {
                               />
                             </div>
 
-                            {/* Advanced settings toggle button */}
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setExpandedStepIds(prev => ({
-                                  ...prev,
-                                  [step.id]: !prev[step.id]
-                                }));
-                              }}
-                              className={`p-1 text-xs font-semibold rounded hover:bg-slate-100 flex items-center gap-1 transition-colors ${
-                                isExpanded ? 'bg-blue-50 text-blue-600 hover:bg-blue-100' : 'text-slate-400 hover:text-slate-600'
-                              }`}
-                              title="高级设置"
-                            >
-                              <Settings2 size={13} />
-                              <span className="text-[10px]">高级</span>
-                            </button>
-
                             <button
                               type="button"
                               onClick={() => handleDeleteStep(step.id, step.name)}
@@ -854,34 +869,34 @@ export const Settings: React.FC = () => {
                           </div>
                         </div>
 
-                        {/* Expandable Advanced Panel */}
+                        {/* Lower row: Advanced Settings fold-out */}
                         {isExpanded && (
-                          <div className="mt-2.5 pt-2.5 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between text-xs text-slate-500 gap-2 animate-slide-down" draggable={false} onDragStart={(e) => e.stopPropagation()}>
-                            <div className="flex items-center space-x-1.5">
-                              <span className="font-bold text-slate-500">流程节点属性 (Node Attribute):</span>
-                              <select
-                                value={step.attribute || '无'}
-                                onChange={(e) => handleChangeAttribute(index, e.target.value as StepAttribute)}
-                                className="bg-slate-50 border border-slate-200 rounded px-2 py-1 text-xs text-slate-700 font-bold focus:outline-none focus:border-blue-500"
-                              >
-                                <option value="无">无 (No Attribute)</option>
-                                <option value="申请">申请 (Application)</option>
-                                <option value="审批">审批 (Approval)</option>
-                                <option value="采购">采购 (Procurement)</option>
-                                <option value="签约">签约 (Contracting)</option>
-                                <option value="到货">到货 (Delivery)</option>
-                                <option value="验收">验收 (Acceptance)</option>
-                                <option value="结算">结算 (Settlement)</option>
-                                <option value="付款">付款 (Payment)</option>
-                                <option value="寄出">寄出 (Dispatch)</option>
-                                <option value="完成">完成 (Completion)</option>
-                                <option value="异常">异常 (Exception)</option>
-                                <option value="自定义">自定义 (Custom)</option>
-                              </select>
+                          <div className="border-t border-slate-100 bg-slate-50/50 p-3 rounded-b-lg space-y-2 animate-fade-in text-xs" draggable={false} onDragStart={(e) => e.stopPropagation()}>
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-2.5 rounded-lg border border-slate-200/60">
+                              <div>
+                                <span className="font-bold text-slate-700 block text-xs">流程节点属性 (Node Attribute)</span>
+                                <span className="text-slate-400 text-[10px] block mt-0.5">跨流程统一业务意义，便于数据中心一键调取</span>
+                              </div>
+                              <div className="flex items-center space-x-2 flex-shrink-0">
+                                <select
+                                  value={step.nodeAttribute || ''}
+                                  onChange={(e) => handleBindNodeAttribute(index, e.target.value)}
+                                  className="px-2.5 py-1 rounded-md border border-slate-200 bg-white text-xs text-slate-750 focus:outline-none focus:ring-1 focus:ring-blue-100 font-bold cursor-pointer"
+                                >
+                                  <option value="">-- 请选择关联节点属性 --</option>
+                                  {nodeAttributes.map(attr => (
+                                    <option key={attr} value={attr}>{attr}</option>
+                                  ))}
+                                </select>
+                                <button
+                                  type="button"
+                                  onClick={() => setIsNodeAttrModalOpen(true)}
+                                  className="text-[10px] text-indigo-600 hover:text-indigo-850 bg-indigo-50 border border-indigo-100 px-2 py-1 rounded-md font-bold cursor-pointer transition-all hover:bg-indigo-100/60"
+                                >
+                                  ⚙️ 管理属性列表
+                                </button>
+                              </div>
                             </div>
-                            <span className="text-[10px] text-slate-400 font-mono text-right shrink-0">
-                              Step ID: <span className="bg-slate-100 px-1 py-0.5 rounded font-bold">{step.id}</span>
-                            </span>
                           </div>
                         )}
                       </div>
@@ -1674,6 +1689,172 @@ export const Settings: React.FC = () => {
                 className="px-4 py-1.8 bg-blue-600 hover:bg-blue-700 text-white shadow-3xs text-xs font-bold rounded-lg cursor-pointer transition-all"
               >
                 🚀 确认一键安全迁移并删除原节点
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Node Attributes Management Modal */}
+      {isNodeAttrModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-xl border border-slate-100 max-w-md w-full p-6 space-y-4 animate-scale-up">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="font-bold text-slate-800 text-sm flex items-center space-x-2">
+                <span>⚙️ 管理流程节点属性</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsNodeAttrModalOpen(false);
+                  setEditingNodeAttrIndex(null);
+                }}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded hover:bg-slate-50 transition-colors cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Inline Add Input */}
+            <div className="space-y-1.5">
+              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest font-bold">
+                新增节点属性：
+              </label>
+              <div className="flex items-center space-x-2">
+                <input
+                  type="text"
+                  placeholder="如: 结算、理货、开票..."
+                  value={newNodeAttrValue}
+                  onChange={(e) => setNewNodeAttrValue(e.target.value)}
+                  className="flex-1 px-3 py-1.8 rounded-lg border border-slate-200 text-xs focus:ring-1 focus:ring-blue-100 focus:outline-none font-medium text-slate-700 bg-white"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      if (newNodeAttrValue.trim()) {
+                        addNodeAttribute(newNodeAttrValue);
+                        setNewNodeAttrValue('');
+                      }
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (newNodeAttrValue.trim()) {
+                      addNodeAttribute(newNodeAttrValue);
+                      setNewNodeAttrValue('');
+                    }
+                  }}
+                  className="px-4 py-1.8 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-lg cursor-pointer transition-all shadow-3xs"
+                >
+                  添加
+                </button>
+              </div>
+            </div>
+
+            {/* Current List */}
+            <div className="space-y-2">
+              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest font-bold">
+                当前属性列表 (共 {nodeAttributes.length} 个)：
+              </label>
+              <div className="border border-slate-100 rounded-lg max-h-56 overflow-y-auto divide-y divide-slate-100 bg-slate-50/30">
+                {nodeAttributes.map((attr, idx) => {
+                  const isEditingThis = editingNodeAttrIndex === idx;
+                  return (
+                    <div key={idx} className="flex items-center justify-between p-2.5 bg-white text-xs text-slate-700 hover:bg-slate-50/50 transition-colors">
+                      {isEditingThis ? (
+                        <div className="flex items-center space-x-1.5 flex-1 mr-2">
+                          <input
+                            type="text"
+                            value={editingNodeAttrValue}
+                            onChange={(e) => setEditingNodeAttrValue(e.target.value)}
+                            className="flex-1 px-2 py-1 rounded border border-blue-400 text-xs focus:outline-none font-bold text-slate-700 bg-white"
+                            autoFocus
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                updateNodeAttribute(attr, editingNodeAttrValue);
+                                setEditingNodeAttrIndex(null);
+                              } else if (e.key === 'Escape') {
+                                setEditingNodeAttrIndex(null);
+                              }
+                            }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              updateNodeAttribute(attr, editingNodeAttrValue);
+                              setEditingNodeAttrIndex(null);
+                            }}
+                            className="p-1 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 rounded font-bold cursor-pointer"
+                            title="保存"
+                          >
+                            <Check size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingNodeAttrIndex(null)}
+                            className="p-1 bg-rose-50 text-rose-600 hover:bg-rose-100 rounded font-bold cursor-pointer"
+                            title="取消"
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex-1 font-bold text-slate-750">{attr}</div>
+                      )}
+
+                      {!isEditingThis && (
+                        <div className="flex items-center space-x-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingNodeAttrIndex(idx);
+                              setEditingNodeAttrValue(attr);
+                            }}
+                            className="p-1 hover:bg-slate-100 text-slate-400 hover:text-blue-600 rounded transition-colors cursor-pointer"
+                            title="编辑重命名"
+                          >
+                            <Edit3 size={13} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (window.confirm(`确定要删除属性【${attr}】吗？删除后所有模板中绑定该属性的节点都将被解除绑定。`)) {
+                                deleteNodeAttribute(attr);
+                              }
+                            }}
+                            className="p-1 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded transition-colors cursor-pointer"
+                            title="删除"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {nodeAttributes.length === 0 && (
+                  <div className="p-8 text-center text-slate-400 text-xs">
+                    暂无任何属性，请在上方进行添加。
+                  </div>
+                )}
+              </div>
+              <p className="text-[10px] text-slate-400 leading-relaxed">
+                * 修改或重命名某一属性时，系统将<b>自动更新并同步</b>所有已绑定该属性的流程节点，无需手动修改。
+              </p>
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsNodeAttrModalOpen(false);
+                  setEditingNodeAttrIndex(null);
+                }}
+                className="px-4 py-1.8 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg cursor-pointer transition-all"
+              >
+                关闭
               </button>
             </div>
           </div>

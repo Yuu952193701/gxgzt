@@ -1,15 +1,59 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Star, Database, Plus, Trash2, Edit2, Columns, Filter, ArrowUpDown, 
   ChevronDown, ChevronRight, Save, Copy, Check, X, Search, FileSpreadsheet,
   AlertCircle, Info, MoveUp, MoveDown, Eye, EyeOff, Maximize2, Minimize2,
-  Lock, RefreshCw, SlidersHorizontal, Settings2, RotateCcw
+  Sparkles, SlidersHorizontal, Calculator, History, FileCheck, Layers, Settings2,
+  ChevronLeft, ArrowUpRight, HelpCircle
 } from 'lucide-react';
 import { useAppState } from '../context/AppContext';
 import { 
-  DataCenterConfig, DataSourceType, ViewColumnConfig, ViewFilterConfig, 
-  ViewSortConfig, CustomFieldConfig, SHIPS, MEMBERS, StepAttribute
+  DataSourceType, SHIPS, MEMBERS, ViewFilterConfig, ViewSortConfig
 } from '../types';
+
+// Extend column config for V2
+export interface V2ColumnConfig {
+  field: string;         // Unique key, e.g. 'code', 'custom_123'
+  label: string;         // Column name
+  visible: boolean;
+  width: number;
+  order: number;
+  
+  // V2 Additions
+  columnSource: 'db' | 'state' | 'history' | 'calc' | 'manual';
+  
+  // For 'db' or 'state'
+  dbField?: string;      // e.g. 'code', 'name', 'status', 'isUrgent'
+  
+  // For 'history'
+  historyConfig?: {
+    nodeAttr: string;    // Node attribute name, e.g. '结算'
+    metric: 'enter_time' | 'complete_time' | 'passed' | 'stay_time' | 'latency_between';
+    targetNodeAttr?: string; // For latency_between
+  };
+  
+  // For 'calc'
+  calcConfig?: {
+    op: 'add' | 'sub' | 'count' | 'condition' | 'datediff' | 'percentage' | 'isnull' | 'formula';
+    fieldA: string;
+    fieldB?: string;
+    fieldC?: string;
+    constantVal?: string;
+  };
+}
+
+// Unified Online Ledger Configuration
+export interface V2LedgerConfig {
+  id: string;
+  name: string;
+  isStarred: boolean;
+  dataSources: DataSourceType[]; // e.g. ['pre', 'purchase']
+  filters: ViewFilterConfig[];
+  columns: V2ColumnConfig[];
+  sorts: ViewSortConfig[];
+  manualData: Record<string, Record<string, string>>; // rowId -> fieldKey -> cellValue
+  createdAt: string;
+}
 
 export const DataCenter: React.FC = () => {
   const {
@@ -26,1625 +70,1482 @@ export const DataCenter: React.FC = () => {
     postServiceWorkflow,
     bidWorkflow,
     workflowTemplates,
+    nodeAttributes,
+    addNodeAttribute,
+    deleteNodeAttribute,
+    updateNodeAttribute,
     addSystemLog
   } = useAppState();
 
-  // Selected config/ledger ID
-  const [selectedConfigId, setSelectedConfigId] = useState<string | null>(() => {
-    const saved = localStorage.getItem('p_workbench_datacenter_configs_v2');
+  // 1. Permanently Saved Ledger Configurations State
+  const [ledgers, setLedgers] = useState<V2LedgerConfig[]>(() => {
+    const saved = localStorage.getItem('p_workbench_datacenter_v2_ledgers');
     if (saved) {
       try {
-        const parsed = JSON.parse(saved) as DataCenterConfig[];
-        if (parsed.length > 0) return parsed[0].id;
-      } catch (e) {}
-    }
-    return 'ledger-1';
-  });
-
-  // Loaded configuration states (Ledgers)
-  const [configs, setConfigs] = useState<DataCenterConfig[]>(() => {
-    const saved = localStorage.getItem('p_workbench_datacenter_configs_v2');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved) as DataCenterConfig[];
-        // Sanitizing stored configs to remove any duplicate column fields
-        return parsed.map(c => {
-          if (c.columns) {
-            const seen = new Set<string>();
-            const uniqueCols = c.columns.filter(col => {
-              if (seen.has(col.field)) return false;
-              seen.add(col.field);
-              return true;
-            });
-            return { ...c, columns: uniqueCols };
-          }
-          return c;
-        });
+        return JSON.parse(saved);
       } catch (e) {
-        console.error('Error parsing data center configs', e);
+        console.error('Error parsing ledgers V2', e);
       }
     }
 
-    // High quality Seed ledgers reflecting actual procurement workflows
-    const seeds: DataCenterConfig[] = [
+    // Default Seed Ledger reflecting real procurement requirements
+    const seeds: V2LedgerConfig[] = [
       {
-        id: 'ledger-1',
-        name: '🚢 综合成本台账',
-        type: 'view',
+        id: 'ledger-seed-1',
+        name: '采购服务综合收支明细台账',
         isStarred: true,
-        dataSource: 'purchase',
         dataSources: ['purchase', 'service'],
         filters: [],
         columns: [
-          { field: 'code', label: '合同编号', visible: true, order: 1, width: 140, category: 'business' },
-          { field: 'name', label: '合同名称', visible: true, order: 2, width: 220, category: 'business' },
-          { field: 'ship', label: '所属船舶', visible: true, order: 3, width: 110, category: 'business' },
-          { field: 'amount', label: '合同金额 (元)', visible: true, order: 4, width: 130, category: 'business' },
-          { field: 'supplierId', label: '供应商', visible: true, order: 5, width: 180, category: 'business' },
-          { field: 'status', label: '当前流程节点', visible: true, order: 6, width: 130, category: 'status' },
-          { field: 'status_attribute', label: '阶段业务意义', visible: true, order: 7, width: 120, category: 'status' },
-          { field: 'calc_process_time', label: '累计办理耗时', visible: true, order: 8, width: 120, category: 'calc', calcType: 'process_time' },
-          { field: 'manual_remark', label: '领导备注情况', visible: true, order: 9, width: 160, category: 'manual' }
+          { field: 'code', label: '合同编号', visible: true, width: 140, order: 1, columnSource: 'db', dbField: 'code' },
+          { field: 'name', label: '合同名称', visible: true, width: 220, order: 2, columnSource: 'db', dbField: 'name' },
+          { field: 'ship', label: '所属船舶', visible: true, width: 110, order: 3, columnSource: 'db', dbField: 'ship' },
+          { field: 'amount', label: '合同金额', visible: true, width: 130, order: 4, columnSource: 'db', dbField: 'amount' },
+          { field: 'supplierId', label: '合作商名称', visible: true, width: 180, order: 5, columnSource: 'db', dbField: 'supplierId' },
+          { field: 'status_name', label: '当前所处节点', visible: true, width: 130, order: 6, columnSource: 'state', dbField: 'nodeName' },
+          { field: 'status_attr', label: '核心业务属性', visible: true, width: 110, order: 7, columnSource: 'state', dbField: 'nodeAttr' },
+          { field: 'is_finished', label: '履行完成状态', visible: true, width: 110, order: 8, columnSource: 'state', dbField: 'isFinished' }
         ],
         sorts: [],
-        customFields: [],
-        manualValues: {
-          'c-001': { 'manual_remark': '已与轮机长核对，合同付款条件无误' },
-          'c-002': { 'manual_remark': '财务正安排第二批结算付款审批' }
-        },
+        manualData: {},
         createdAt: new Date().toISOString()
       },
       {
-        id: 'ledger-2',
-        name: '⛓️ 前置采购需求追踪表',
-        type: 'view',
-        isStarred: true,
-        dataSource: 'pre',
+        id: 'ledger-seed-2',
+        name: '前置需求项目流转监控账',
+        isStarred: false,
         dataSources: ['pre'],
         filters: [],
         columns: [
-          { field: 'code', label: '项目编号', visible: true, order: 1, width: 120, category: 'business' },
-          { field: 'name', label: '项目名称', visible: true, order: 2, width: 200, category: 'business' },
-          { field: 'ship', label: '所属船舶', visible: true, order: 3, width: 110, category: 'business' },
-          { field: 'status', label: '流程当前步骤', visible: true, order: 4, width: 130, category: 'status' },
-          { field: 'calc_stay_days', label: '节点停留天数', visible: true, order: 5, width: 120, category: 'calc', calcType: 'stay_days' },
-          { field: 'calc_is_overdue', label: '是否超期异常', visible: true, order: 6, width: 120, category: 'calc', calcType: 'is_overdue' },
-          { field: 'manual_phone_check', label: '轮机确认电话', visible: true, order: 7, width: 150, category: 'manual' }
+          { field: 'code', label: '项目编号', visible: true, width: 130, order: 1, columnSource: 'db', dbField: 'code' },
+          { field: 'name', label: '项目名称', visible: true, width: 200, order: 2, columnSource: 'db', dbField: 'name' },
+          { field: 'ship', label: '所属船舶', visible: true, width: 110, order: 3, columnSource: 'db', dbField: 'ship' },
+          { field: 'owners', label: '需求负责人', visible: true, width: 140, order: 4, columnSource: 'db', dbField: 'owners' },
+          { field: 'status_name', label: '当前状态', visible: true, width: 130, order: 5, columnSource: 'state', dbField: 'nodeName' },
+          { field: 'is_overdue', label: '是否延迟异常', visible: true, width: 110, order: 6, columnSource: 'state', dbField: 'isOverdue' }
         ],
         sorts: [],
-        customFields: [],
-        manualValues: {
-          'd-001': { 'manual_phone_check': '已电话确认上海壳牌下午送样' },
-          'd-002': { 'manual_phone_check': '电缆数量已跟轮机长核实一致' }
-        },
-        createdAt: new Date().toISOString()
-      },
-      {
-        id: 'ledger-3',
-        name: '📊 投标与协作台账',
-        type: 'view',
-        isStarred: false,
-        dataSource: 'bid',
-        dataSources: ['bid'],
-        filters: [],
-        columns: [
-          { field: 'name', label: '标书/项目名称', visible: true, order: 1, width: 220, category: 'business' },
-          { field: 'ship', label: '所属船舶', visible: true, order: 2, width: 110, category: 'business' },
-          { field: 'tenderUnit', label: '招标单位', visible: true, order: 3, width: 180, category: 'business' },
-          { field: 'status', label: '当前节点', visible: true, order: 4, width: 130, category: 'status' },
-          { field: 'supplierId', label: '协作供货商', visible: true, order: 5, width: 180, category: 'business' },
-          { field: 'calc_process_time', label: '办理耗时', visible: true, order: 6, width: 120, category: 'calc', calcType: 'process_time' },
-          { field: 'manual_bid_status', label: '报送人反馈', visible: true, order: 7, width: 150, category: 'manual' }
-        ],
-        sorts: [],
-        customFields: [],
-        manualValues: {
-          'b-001': { 'manual_bid_status': '标书已密封，下午寄送' }
-        },
+        manualData: {},
         createdAt: new Date().toISOString()
       }
     ];
-    localStorage.setItem('p_workbench_datacenter_configs_v2', JSON.stringify(seeds));
+    localStorage.setItem('p_workbench_datacenter_v2_ledgers', JSON.stringify(seeds));
     return seeds;
   });
 
-  // Keep localStorage in sync with config state changes
+  // Sync to localStorage
   useEffect(() => {
-    localStorage.setItem('p_workbench_datacenter_configs_v2', JSON.stringify(configs));
-  }, [configs]);
+    localStorage.setItem('p_workbench_datacenter_v2_ledgers', JSON.stringify(ledgers));
+  }, [ledgers]);
+
+  // Selected Ledger ID
+  const [selectedLedgerId, setSelectedLedgerId] = useState<string | null>(() => {
+    if (ledgers.length > 0) return ledgers[0].id;
+    return null;
+  });
+
+  // Active Ledger Lookup
+  const activeLedger = useMemo(() => {
+    return ledgers.find(l => l.id === selectedLedgerId) || ledgers[0] || null;
+  }, [ledgers, selectedLedgerId]);
 
   // UI States
   const [searchQuery, setSearchQuery] = useState('');
   const [isFullScreen, setIsFullScreen] = useState(false);
   const [isColumnPanelOpen, setIsColumnPanelOpen] = useState(false);
-  const [editingCell, setEditingCell] = useState<{ rowId: string; field: string } | null>(null);
-  const [tempEditValue, setTempEditValue] = useState('');
-  const [isEditingTitle, setIsEditingTitle] = useState(false);
-  const [tempTitle, setTempTitle] = useState('');
+  const [isFiltersPanelOpen, setIsFiltersPanelOpen] = useState(false);
+  const [isSortsPanelOpen, setIsSortsPanelOpen] = useState(false);
+  const [isNodeAttrModalOpen, setIsNodeAttrModalOpen] = useState(false);
+  const [isCreateLedgerModalOpen, setIsCreateLedgerModalOpen] = useState(false);
+  const [isAddColumnModalOpen, setIsAddColumnModalOpen] = useState(false);
 
-  // Creation Flow States
-  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  const [createStep, setCreateStep] = useState<1 | 2>(1);
+  // Creating Ledger States
   const [newLedgerName, setNewLedgerName] = useState('');
   const [newLedgerSources, setNewLedgerSources] = useState<DataSourceType[]>(['purchase']);
-  const [sourceFieldSelection, setSourceFieldSelection] = useState<Record<DataSourceType, string[]>>({
-    pre: ['code', 'name', 'ship', 'status', 'dueDate', 'owners'],
-    purchase: ['code', 'name', 'ship', 'amount', 'supplierId', 'status', 'dueDate', 'owners'],
-    service: ['code', 'name', 'ship', 'amount', 'supplierId', 'status', 'dueDate', 'owners'],
-    bid: ['name', 'ship', 'tenderUnit', 'status', 'supplierId', 'owners']
-  });
+  const [selectedImportFields, setSelectedImportFields] = useState<string[]>(['code', 'name', 'ship', 'amount', 'supplierId', 'nodeName']);
 
-  // Excel-style funnel filters state: { [field]: [checked unique values] }
-  const [excelFilters, setExcelFilters] = useState<Record<string, string[]>>({});
-  const [activeFilterDropdown, setActiveFilterDropdown] = useState<string | null>(null);
-  const [filterSearchQuery, setFilterSearchQuery] = useState('');
+  // Adding Column States
+  const [newColSource, setNewColSource] = useState<'db' | 'state' | 'history' | 'calc' | 'manual'>('db');
+  const [newColLabel, setNewColLabel] = useState('');
+  // Source 1 (db)
+  const [newColDbField, setNewColDbField] = useState('code');
+  // Source 2 (state)
+  const [newColStateField, setNewColStateField] = useState('nodeName');
+  // Source 3 (history)
+  const [newColHistMetric, setNewColHistMetric] = useState<'enter_time' | 'complete_time' | 'passed' | 'stay_time' | 'latency_between'>('enter_time');
+  const [newColHistNodeAttr, setNewColHistNodeAttr] = useState('');
+  const [newColHistTargetNodeAttr, setNewColHistTargetNodeAttr] = useState('');
+  // Source 4 (calc)
+  const [newColCalcOp, setNewColCalcOp] = useState<'add' | 'sub' | 'count' | 'condition' | 'datediff' | 'percentage' | 'isnull' | 'formula'>('add');
+  const [newColCalcFieldA, setNewColCalcFieldA] = useState('');
+  const [newColCalcFieldB, setNewColCalcFieldB] = useState('');
+  const [newColCalcFieldC, setNewColCalcFieldC] = useState('');
+  const [newColCalcConstant, setNewColCalcConstant] = useState('');
 
-  // Add Column Modal States
-  const [isAddColModalOpen, setIsAddColModalOpen] = useState(false);
-  const [newColCategory, setNewColCategory] = useState<'business' | 'status' | 'history' | 'calc' | 'manual'>('business');
-  const [newColBusinessField, setNewColBusinessField] = useState('code');
-  const [newColStatusField, setNewColStatusField] = useState('status');
-  const [newColHistoryAttr, setNewColHistoryAttr] = useState<StepAttribute>('结算');
-  const [newColCalcType, setNewColCalcType] = useState<'process_time' | 'approval_time' | 'stay_days' | 'is_overdue' | 'exec_days'>('process_time');
-  const [newColManualLabel, setNewColManualLabel] = useState('');
+  // Inline Cell Edit States
+  const [editingCell, setEditingCell] = useState<{ rowId: string; field: string } | null>(null);
+  const [tempEditValue, setTempEditValue] = useState('');
 
-  const activeConfig = configs.find(c => c.id === selectedConfigId) || configs[0];
+  // Node Attribute Management States
+  const [newNodeAttr, setNewNodeAttr] = useState('');
+  const [editingNodeAttr, setEditingNodeAttr] = useState<string | null>(null);
+  const [editingNodeAttrValue, setEditingNodeAttrValue] = useState('');
 
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  // Notification / Success Alerts
+  const [appAlert, setAppAlert] = useState<{ type: 'success' | 'info'; title: string; message: string } | null>(null);
 
-  // Close filter dropdown on clicking outside
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setActiveFilterDropdown(null);
+  // Status Resolvers inside local context
+  const getProjectStatusName = (p: any): string => {
+    if (!p) return '';
+    const statusVal = typeof p === 'string' ? p : p.status;
+    const templateId = typeof p === 'string' ? undefined : p.templateId;
+    const tpl = (templateId ? workflowTemplates.find(t => t.id === templateId) : null) || 
+                workflowTemplates.find(t => t.module === 'pre' && t.isDefault) ||
+                workflowTemplates.find(t => t.module === 'pre');
+    const steps = tpl?.steps || preWorkflow;
+    let step = steps.find(s => s.id === statusVal || s.name === statusVal);
+    
+    if (!step && typeof p === 'string') {
+      for (const t of workflowTemplates.filter(t => t.module === 'pre')) {
+        step = t.steps.find(s => s.id === statusVal || s.name === statusVal);
+        if (step) break;
       }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  // Sync title input
-  useEffect(() => {
-    if (activeConfig) {
-      setTempTitle(activeConfig.name);
     }
-  }, [activeConfig]);
+    return step ? step.name : statusVal;
+  };
 
-  // --------------------------------------------------------
-  // Helper field metadata and translation catalogs
-  // --------------------------------------------------------
-  const FIELD_TRANSLATIONS: Record<string, string> = {
-    code: '编号',
-    name: '名称',
+  const getContractStatusName = (c: any): string => {
+    if (!c) return '';
+    const statusVal = typeof c === 'string' ? c : c.status;
+    const templateId = typeof c === 'string' ? undefined : c.templateId;
+    const contractType = typeof c === 'string' ? undefined : c.contractType;
+    const moduleType = contractType === 'service' ? 'service' : 'purchase';
+    const tpl = (templateId ? workflowTemplates.find(t => t.id === templateId) : null) || 
+                workflowTemplates.find(t => t.module === moduleType && t.isDefault) ||
+                workflowTemplates.find(t => t.module === moduleType) ||
+                workflowTemplates.find(t => t.module === 'purchase');
+    const steps = tpl?.steps || (contractType === 'service' ? postServiceWorkflow : postWorkflow);
+    let step = steps.find(s => s.id === statusVal || s.name === statusVal);
+    
+    if (!step && typeof c === 'string') {
+      for (const t of workflowTemplates.filter(t => t.module === 'purchase' || t.module === 'service')) {
+        step = t.steps.find(s => s.id === statusVal || s.name === statusVal);
+        if (step) break;
+      }
+    }
+    return step ? step.name : statusVal;
+  };
+
+  const getBidStatusName = (b: any): string => {
+    if (!b) return '';
+    const statusVal = typeof b === 'string' ? b : b.status;
+    const templateId = typeof b === 'string' ? undefined : b.templateId;
+    const tpl = (templateId ? workflowTemplates.find(t => t.id === templateId) : null) || 
+                workflowTemplates.find(t => t.module === 'bid' && t.isDefault) ||
+                workflowTemplates.find(t => t.module === 'bid');
+    const steps = tpl?.steps || bidWorkflow;
+    let step = steps.find(s => s.id === statusVal || s.name === statusVal);
+    
+    if (!step && typeof b === 'string') {
+      for (const t of workflowTemplates.filter(t => t.module === 'bid')) {
+        step = t.steps.find(s => s.id === statusVal || s.name === statusVal);
+        if (step) break;
+      }
+    }
+    return step ? step.name : statusVal;
+  };
+
+  // Raw Field Mapping lookup
+  const FIELD_METADATA_MAP: Record<string, string> = {
+    code: '编号 / 合同号',
+    name: '业务名称',
     ship: '所属船舶',
-    status: '当前节点',
-    amount: '金额 (元)',
-    supplierId: '关联商户/供应商',
-    isUrgent: '是否紧急',
-    dueDate: '截止日期',
-    owners: '责任归属',
-    tags: '标签',
-    remark: '备注说明',
-    createdAt: '创建时间',
-    tenderUnit: '招标单位'
+    amount: '合同/项目金额',
+    supplierId: '合作公司 / 供应商',
+    owners: '归属负责人',
+    dueDate: '收收付/截止日期',
+    createdAt: '创建/签署时间',
+    tags: '标签分类',
+    remark: '备注说明'
   };
 
-  const BUSINESS_FIELDS_OPTIONS = [
-    { value: 'code', label: '项目/合同编号 (code)' },
-    { value: 'name', label: '项目/合同名称 (name)' },
-    { value: 'ship', label: '所属船舶 (ship)' },
-    { value: 'amount', label: '金额 (amount)' },
-    { value: 'supplierId', label: '关联供应商/协作商 (supplierId)' },
-    { value: 'owners', label: '归属责任成员 (owners)' },
-    { value: 'dueDate', label: '截止日期 (dueDate)' },
-    { value: 'tags', label: '标签 (tags)' },
-    { value: 'remark', label: '备注说明 (remark)' },
-    { value: 'createdAt', label: '创建/签署时间 (createdAt)' },
-    { value: 'tenderUnit', label: '招标单位 (tenderUnit)' }
-  ];
-
-  const STATUS_FIELDS_OPTIONS = [
-    { value: 'status', label: '当前流程步骤 (节点名称)' },
-    { value: 'status_attribute', label: '流程节点业务属性' },
-    { value: 'status_color', label: '当前流程标记颜色' },
-    { value: 'status_template', label: '当前工作流模板' },
-    { value: 'status_is_completed', label: '是否已归档完成' },
-    { value: 'status_is_exception', label: '是否处于异常节点' }
-  ];
-
-  const CALC_FIELDS_OPTIONS = [
-    { value: 'process_time', label: '办理耗时 (自创建至今或至归档完成的总耗时)' },
-    { value: 'approval_time', label: '审批耗时 (处于[审批]属性节点的持续时间)' },
-    { value: 'stay_days', label: '节点停留天数 (处于当前流程节点的总停留时间)' },
-    { value: 'is_overdue', label: '是否超期异常 (当前日期是否越过截至日期)' },
-    { value: 'exec_days', label: '台账执行天数 (合同执行天数)' }
-  ];
-
-  // Global map of available database fields per module
-  const DB_FIELDS_BY_SOURCE: Record<DataSourceType, { value: string; label: string }[]> = {
-    pre: [
-      { value: 'code', label: '项目编号' },
-      { value: 'name', label: '项目名称' },
-      { value: 'ship', label: '所属船舶' },
-      { value: 'status', label: '当前状态' },
-      { value: 'dueDate', label: '截至日期' },
-      { value: 'owners', label: '责任归属' },
-      { value: 'tags', label: '标签' },
-      { value: 'remark', label: '备注' },
-      { value: 'createdAt', label: '创建时间' }
-    ],
-    purchase: [
-      { value: 'code', label: '合同编号' },
-      { value: 'name', label: '合同名称' },
-      { value: 'ship', label: '所属船舶' },
-      { value: 'amount', label: '合同金额' },
-      { value: 'supplierId', label: '合作供应商' },
-      { value: 'status', label: '付款节点' },
-      { value: 'dueDate', label: '收付截止日' },
-      { value: 'owners', label: '责任归属' },
-      { value: 'tags', label: '标签' },
-      { value: 'remark', label: '备注' },
-      { value: 'createdAt', label: '签署时间' }
-    ],
-    service: [
-      { value: 'code', label: '合同编号' },
-      { value: 'name', label: '合同名称' },
-      { value: 'ship', label: '所属船舶' },
-      { value: 'amount', label: '合同金额' },
-      { value: 'supplierId', label: '合作服务商' },
-      { value: 'status', label: '服务节点' },
-      { value: 'dueDate', label: '结算截止日' },
-      { value: 'owners', label: '责任归属' },
-      { value: 'tags', label: '标签' },
-      { value: 'remark', label: '备注' },
-      { value: 'createdAt', label: '签署时间' }
-    ],
-    bid: [
-      { value: 'name', label: '标书名称' },
-      { value: 'ship', label: '所属船舶' },
-      { value: 'tenderUnit', label: '招标单位' },
-      { value: 'status', label: '流程步骤' },
-      { value: 'supplierId', label: '协作供货商' },
-      { value: 'dueDate', label: '截标日期' },
-      { value: 'owners', label: '责任归属' },
-      { value: 'tags', label: '标签' },
-      { value: 'remark', label: '备注' },
-      { value: 'createdAt', label: '建档时间' }
-    ]
-  };
-
-  // --------------------------------------------------------
-  // Workflow step attribute resolver
-  // --------------------------------------------------------
-  const getStepAttributeByName = (stepName: string, moduleType?: DataSourceType) => {
-    // 1. Check custom templates
-    for (const t of workflowTemplates) {
-      if (!moduleType || t.module === moduleType) {
-        const step = t.steps.find(s => s.name === stepName);
-        if (step && step.attribute) return step.attribute;
-      }
+  // Node Attribute Lists Initialization
+  useEffect(() => {
+    if (nodeAttributes.length > 0 && !newColHistNodeAttr) {
+      setNewColHistNodeAttr(nodeAttributes[0]);
+      setNewColHistTargetNodeAttr(nodeAttributes[0]);
     }
-    // 2. Check defaults
-    const defaults = [
-      ...preWorkflow,
-      ...postWorkflow,
-      ...postServiceWorkflow,
-      ...bidWorkflow
-    ];
-    const defaultStep = defaults.find(s => s.name === stepName);
-    if (defaultStep && defaultStep.attribute) return defaultStep.attribute;
+  }, [nodeAttributes]);
+
+  // ----------------------------------------------------------------------
+  // DYNAMIC COMPILATION OF MERGED DATA SOURCES (ONLINE COEXISTENCE)
+  // ----------------------------------------------------------------------
+  
+  // Create logical rows uniting active data sources
+  const compiledRows = useMemo(() => {
+    if (!activeLedger) return [];
     
-    return '无';
-  };
-
-  const getStepColorByName = (stepName: string) => {
-    // Find color
-    for (const t of workflowTemplates) {
-      const step = t.steps.find(s => s.name === stepName);
-      if (step) return step.color;
-    }
-    const defaults = [
-      ...preWorkflow,
-      ...postWorkflow,
-      ...postServiceWorkflow,
-      ...bidWorkflow
-    ];
-    const defaultStep = defaults.find(s => s.name === stepName);
-    if (defaultStep) return defaultStep.color;
-    return 'green';
-  };
-
-  // --------------------------------------------------------
-  // Calculation engines for different column categories
-  // --------------------------------------------------------
-  const getHistoryTimeForAttribute = (row: any, attr: StepAttribute) => {
-    if (!row.history || row.history.length === 0) return '';
+    const rows: { id: string; sourceType: DataSourceType; original: any }[] = [];
     
-    const moduleType = row.__sourceType;
-    let steps: any[] = [];
-    
-    if (row.templateId) {
-      const tpl = workflowTemplates.find(t => t.id === row.templateId);
-      if (tpl) steps = tpl.steps;
-    }
-    
-    if (steps.length === 0) {
-      if (moduleType === 'pre') steps = preWorkflow;
-      else if (moduleType === 'purchase') steps = postWorkflow;
-      else if (moduleType === 'service') steps = postServiceWorkflow;
-      else if (moduleType === 'bid') steps = bidWorkflow;
-    }
-
-    // Identify target step names that have this attribute
-    const targetNames = steps.filter(s => s.attribute === attr).map(s => s.name);
-    if (targetNames.length === 0) return '';
-
-    // Find in history transition leaving that step (fromStep matches)
-    // Sort history by time descending to find latest
-    const sortedHistory = [...row.history].sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
-    const match = sortedHistory.find(h => h.fromStep && targetNames.includes(h.fromStep));
-    if (match) return match.time;
-
-    return '';
-  };
-
-  const formatDurationDays = (ms: number) => {
-    if (ms <= 0) return '0天';
-    const days = Math.floor(ms / (1000 * 60 * 60 * 24));
-    if (days > 0) return `${days}天`;
-    const hours = Math.floor(ms / (1000 * 60 * 60));
-    if (hours > 0) return `${hours}小时`;
-    const mins = Math.floor(ms / (1000 * 60));
-    return `${mins || 1}分钟`;
-  };
-
-  const calculateField = (row: any, calcType: string) => {
-    const createdTime = new Date(row.createdAt).getTime();
-    const nowTime = new Date().getTime();
-
-    // Find completed state
-    const currentAttr = getStepAttributeByName(row.status, row.__sourceType);
-    const isCompleted = currentAttr === '完成';
-
-    // Time completed (entered '完成' node)
-    let completedTime = nowTime;
-    if (isCompleted && row.history) {
-      const compHistory = row.history.find((h: any) => h.toStep && getStepAttributeByName(h.toStep, row.__sourceType) === '完成');
-      if (compHistory) {
-        completedTime = new Date(compHistory.time).getTime();
-      }
-    }
-
-    switch (calcType) {
-      case 'process_time': {
-        // Total duration
-        const duration = isCompleted ? (completedTime - createdTime) : (nowTime - createdTime);
-        return formatDurationDays(duration);
-      }
-      case 'approval_time': {
-        // Find history inside '审批' step attributes
-        if (!row.history || row.history.length === 0) return '0天';
-        let approvalMs = 0;
-        // Simple heuristic: find duration between entering '审批' and leaving '审批'
-        let enterTime: number | null = null;
-        row.history.forEach((h: any) => {
-          const toAttr = getStepAttributeByName(h.toStep, row.__sourceType);
-          const fromAttr = h.fromStep ? getStepAttributeByName(h.fromStep, row.__sourceType) : '无';
-          
-          if (toAttr === '审批' && !enterTime) {
-            enterTime = new Date(h.time).getTime();
-          }
-          if (fromAttr === '审批' && enterTime) {
-            approvalMs += (new Date(h.time).getTime() - enterTime);
-            enterTime = null;
-          }
+    activeLedger.dataSources.forEach(source => {
+      if (source === 'pre') {
+        projects.forEach(p => {
+          rows.push({ id: p.id, sourceType: 'pre', original: p });
         });
-        // If currently in approval
-        if (currentAttr === '审批' && enterTime) {
-          approvalMs += (nowTime - enterTime);
-        }
-        return formatDurationDays(approvalMs);
+      } else if (source === 'purchase') {
+        contracts.filter(c => c.contractType === 'purchase').forEach(c => {
+          rows.push({ id: c.id, sourceType: 'purchase', original: c });
+        });
+      } else if (source === 'service') {
+        contracts.filter(c => c.contractType === 'service').forEach(c => {
+          rows.push({ id: c.id, sourceType: 'service', original: c });
+        });
+      } else if (source === 'bid') {
+        bids.forEach(b => {
+          rows.push({ id: b.id, sourceType: 'bid', original: b });
+        });
       }
-      case 'stay_days': {
-        // Find when we entered current step
-        let enterCurrentStepTime = createdTime;
-        if (row.history && row.history.length > 0) {
-          const latestEnter = [...row.history]
-            .sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime())
-            .find(h => h.toStep === row.status);
-          if (latestEnter) {
-            enterCurrentStepTime = new Date(latestEnter.time).getTime();
-          }
-        }
-        return formatDurationDays(nowTime - enterCurrentStepTime);
-      }
-      case 'is_overdue': {
-        if (!row.dueDate) return '正常';
-        const dueTimestamp = new Date(row.dueDate).getTime();
-        const pastDue = !isCompleted && nowTime > dueTimestamp;
-        return pastDue ? '⚠️ 已超期' : '正常';
-      }
-      case 'exec_days': {
-        const duration = isCompleted ? (completedTime - createdTime) : (nowTime - createdTime);
-        return formatDurationDays(duration);
-      }
-      default:
-        return '';
-    }
-  };
+    });
+    
+    return rows;
+  }, [activeLedger, projects, contracts, bids]);
 
-  // --------------------------------------------------------
-  // Cell reading & parsing engine
-  // --------------------------------------------------------
-  const getCellValue = (row: any, col: ViewColumnConfig, ledger: DataCenterConfig): string => {
-    const cat = col.category || 'business';
-
-    if (cat === 'business') {
-      const val = row[col.field];
-      if (val === undefined || val === null) return '';
-
-      if (col.field === 'supplierId') {
+  // ----------------------------------------------------------------------
+  // CELL VALUE RESOLVER (THE CORE COMPUTATION ENGINE)
+  // ----------------------------------------------------------------------
+  const getCellValue = (row: { id: string; sourceType: DataSourceType; original: any }, col: V2ColumnConfig): string => {
+    const item = row.original;
+    const sourceType = row.sourceType;
+    
+    // 1. Business Fields
+    if (col.columnSource === 'db') {
+      const dbField = col.dbField || col.field;
+      const val = item[dbField];
+      
+      if (dbField === 'supplierId' && val) {
         const sup = suppliers.find(s => s.id === val);
-        return sup ? sup.name : '未关联';
+        return sup ? sup.name : val;
       }
-      if (col.field === 'owners' && Array.isArray(val)) {
+      if (dbField === 'owners' && Array.isArray(val)) {
         return val.map(email => {
           const u = users.find(usr => usr.email === email);
           return u ? u.name : email;
-        }).join(', ') || '未指派';
+        }).join(', ');
       }
-      if (col.field === 'tags' && Array.isArray(val)) {
-        return val.join(', ') || '-';
+      if (dbField === 'tags' && Array.isArray(val)) {
+        return val.join(', ');
       }
-      if (col.field === 'isUrgent') {
-        return val ? '⚠️ 紧急' : '普通';
+      if (dbField === 'amount') {
+        return val ? `¥${Number(val).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-';
       }
-      if (col.field === 'amount') {
-        return val ? `${Number(val).toLocaleString()} 元` : '0.00';
-      }
-      if (col.field === 'dueDate' || col.field === 'createdAt') {
-        return val ? val.split('T')[0] : '';
-      }
-      return String(val);
+      return val !== undefined && val !== null ? String(val) : '-';
     }
-
-    if (cat === 'status') {
-      if (col.field === 'status') return row.status;
-      if (col.field === 'status_attribute') return getStepAttributeByName(row.status, row.__sourceType);
-      if (col.field === 'status_color') {
-        const color = getStepColorByName(row.status);
-        const map: Record<string, string> = { yellow: '🟡 普通交互', green: '🟢 流转等待', blue: '🔵 归档结算', red: '🔴 异常挂起' };
-        return map[color] || '🟢 流程推进';
-      }
-      if (col.field === 'status_template') return row.templateName || '系统默认流转模板';
-      if (col.field === 'status_is_completed') {
-        return getStepAttributeByName(row.status, row.__sourceType) === '完成' ? '✅ 已归档' : '⏳ 流转中';
-      }
-      if (col.field === 'status_is_exception') {
-        const color = getStepColorByName(row.status);
-        return color === 'red' ? '⚠️ 状态异常' : '正常';
-      }
-      return '';
-    }
-
-    if (cat === 'history') {
-      return getHistoryTimeForAttribute(row, col.attrLink || '结算').split(' ')[0] || '-';
-    }
-
-    if (cat === 'calc') {
-      return calculateField(row, col.calcType || 'process_time');
-    }
-
-    if (cat === 'manual') {
-      return ledger.manualValues?.[row.id]?.[col.field] || '';
-    }
-
-    return '';
-  };
-
-  const getLedgerRows = (config: DataCenterConfig) => {
-    const sources = config.dataSources && config.dataSources.length > 0 
-      ? config.dataSources 
-      : [config.dataSource];
-
-    let allRows: any[] = [];
     
-    sources.forEach(src => {
-      let rawItems: any[] = [];
-      if (src === 'pre') {
-        rawItems = projects;
-      } else if (src === 'purchase') {
-        rawItems = contracts.filter(c => c.contractType === 'purchase');
-      } else if (src === 'service') {
-        rawItems = contracts.filter(c => c.contractType === 'service');
-      } else if (src === 'bid') {
-        rawItems = bids;
+    // 2. Current Workflow States
+    if (col.columnSource === 'state') {
+      const stateField = col.dbField || col.field;
+      
+      if (stateField === 'nodeName') {
+        if (sourceType === 'pre') return getProjectStatusName(item);
+        if (sourceType === 'purchase' || sourceType === 'service') return getContractStatusName(item);
+        if (sourceType === 'bid') return getBidStatusName(item);
+        return item.status || '-';
       }
-
-      rawItems.forEach(item => {
-        allRows.push({
-          ...item,
-          __sourceType: src,
-          __originalItem: item
+      
+      if (stateField === 'nodeColor') {
+        const tpl = workflowTemplates.find(t => t.id === item.templateId) ||
+                    workflowTemplates.find(t => t.module === (sourceType === 'pre' ? 'pre' : sourceType === 'bid' ? 'bid' : sourceType === 'service' ? 'service' : 'purchase') && t.isDefault) ||
+                    workflowTemplates.find(t => t.module === (sourceType === 'pre' ? 'pre' : sourceType === 'bid' ? 'bid' : sourceType === 'service' ? 'service' : 'purchase'));
+        const steps = tpl?.steps || (sourceType === 'pre' ? preWorkflow : sourceType === 'bid' ? bidWorkflow : sourceType === 'service' ? postServiceWorkflow : postWorkflow);
+        const step = steps.find(s => s.id === item.status) || steps.find(s => s.name === item.status);
+        return step?.color || 'yellow';
+      }
+      
+      if (stateField === 'nodeAttr') {
+        const tpl = workflowTemplates.find(t => t.id === item.templateId) ||
+                    workflowTemplates.find(t => t.module === (sourceType === 'pre' ? 'pre' : sourceType === 'bid' ? 'bid' : sourceType === 'service' ? 'service' : 'purchase') && t.isDefault) ||
+                    workflowTemplates.find(t => t.module === (sourceType === 'pre' ? 'pre' : sourceType === 'bid' ? 'bid' : sourceType === 'service' ? 'service' : 'purchase'));
+        const steps = tpl?.steps || (sourceType === 'pre' ? preWorkflow : sourceType === 'bid' ? bidWorkflow : sourceType === 'service' ? postServiceWorkflow : postWorkflow);
+        const step = steps.find(s => s.id === item.status) || steps.find(s => s.name === item.status);
+        return step?.nodeAttribute || '未绑定';
+      }
+      
+      if (stateField === 'templateName') {
+        return item.templateName || workflowTemplates.find(t => t.id === item.templateId)?.name || '系统默认模板';
+      }
+      
+      if (stateField === 'isFinished') {
+        const tpl = workflowTemplates.find(t => t.id === item.templateId) ||
+                    workflowTemplates.find(t => t.module === (sourceType === 'pre' ? 'pre' : sourceType === 'bid' ? 'bid' : sourceType === 'service' ? 'service' : 'purchase') && t.isDefault) ||
+                    workflowTemplates.find(t => t.module === (sourceType === 'pre' ? 'pre' : sourceType === 'bid' ? 'bid' : sourceType === 'service' ? 'service' : 'purchase'));
+        const steps = tpl?.steps || (sourceType === 'pre' ? preWorkflow : sourceType === 'bid' ? bidWorkflow : sourceType === 'service' ? postServiceWorkflow : postWorkflow);
+        const isLast = steps.length > 0 && (steps[steps.length - 1].id === item.status || steps[steps.length - 1].name === item.status);
+        return isLast ? '✅ 已归档完成' : '🔄 流程执行中';
+      }
+      
+      if (stateField === 'isOverdue') {
+        if (!item.dueDate) return '正常';
+        const isPast = new Date(item.dueDate) < new Date();
+        return isPast ? '🚨 异常 (已延期)' : '🟢 正常履约中';
+      }
+    }
+    
+    // 3. Workflow History (Reads process logs)
+    if (col.columnSource === 'history') {
+      const config = col.historyConfig;
+      if (!config) return '-';
+      const historyList = item.history || [];
+      
+      // helper to find all step IDs belonging to a node attribute or matching step name
+      const getMatchingSteps = (attrOrName: string) => {
+        const matchSet = new Set<string>();
+        workflowTemplates.forEach(t => t.steps.forEach(s => {
+          if (s.nodeAttribute === attrOrName || s.name === attrOrName) matchSet.add(s.id), matchSet.add(s.name);
+        }));
+        [preWorkflow, postWorkflow, postServiceWorkflow, bidWorkflow].forEach(steps => {
+          steps.forEach(s => {
+            if (s.nodeAttribute === attrOrName || s.name === attrOrName) matchSet.add(s.id), matchSet.add(s.name);
+          });
         });
-      });
-    });
-
-    return allRows;
+        return Array.from(matchSet);
+      };
+      
+      const targetSteps = getMatchingSteps(config.nodeAttr);
+      
+      if (config.metric === 'enter_time') {
+        const log = historyList.find((h: any) => targetSteps.includes(h.toStep));
+        if (log) return log.time;
+        // fallback to creation time if item is at the start step
+        if (item.createdAt && targetSteps.includes(item.status)) {
+          return item.createdAt.substring(0, 16).replace('T', ' ');
+        }
+        return '-';
+      }
+      
+      if (config.metric === 'complete_time') {
+        // *Default complete rule: leaves the node, i.e., fromStep matches target steps*
+        const log = historyList.find((h: any) => h.fromStep && targetSteps.includes(h.fromStep));
+        if (log) return log.time;
+        return '-';
+      }
+      
+      if (config.metric === 'passed') {
+        const passed = historyList.some((h: any) => targetSteps.includes(h.toStep) || (h.fromStep && targetSteps.includes(h.fromStep))) || targetSteps.includes(item.status);
+        return passed ? '是' : '否';
+      }
+      
+      if (config.metric === 'stay_time') {
+        const enterLog = historyList.find((h: any) => targetSteps.includes(h.toStep));
+        const enterTimeStr = enterLog ? enterLog.time : (targetSteps.includes(item.status) ? item.createdAt : null);
+        if (!enterTimeStr) return '-';
+        
+        const leaveLog = historyList.find((h: any) => h.fromStep && targetSteps.includes(h.fromStep));
+        const leaveTimeStr = leaveLog ? leaveLog.time : null;
+        
+        const tStart = new Date(enterTimeStr.replace(' ', 'T'));
+        const tEnd = leaveTimeStr ? new Date(leaveTimeStr.replace(' ', 'T')) : new Date();
+        const diffDays = Math.max(0, Math.floor((tEnd.getTime() - tStart.getTime()) / (1000 * 60 * 60 * 24)));
+        return `${diffDays} 天`;
+      }
+      
+      if (config.metric === 'latency_between') {
+        const targetStepsB = getMatchingSteps(config.targetNodeAttr || '');
+        const leaveLogA = historyList.find((h: any) => h.fromStep && targetSteps.includes(h.fromStep));
+        const leaveLogB = historyList.find((h: any) => h.fromStep && targetStepsB.includes(h.fromStep));
+        
+        if (leaveLogA && leaveLogB) {
+          const tA = new Date(leaveLogA.time.replace(' ', 'T'));
+          const tB = new Date(leaveLogB.time.replace(' ', 'T'));
+          const diffDays = Math.floor(Math.abs(tB.getTime() - tA.getTime()) / (1000 * 60 * 60 * 24));
+          return `${diffDays} 天`;
+        }
+        return '未完成流转';
+      }
+    }
+    
+    // 4. Smart Calculated Fields
+    if (col.columnSource === 'calc') {
+      const config = col.calcConfig;
+      if (!config) return '-';
+      
+      const valA = getCellValueByKey(row, config.fieldA);
+      const valB = config.fieldB ? getCellValueByKey(row, config.fieldB) : '';
+      const valC = config.fieldC ? getCellValueByKey(row, config.fieldC) : '';
+      
+      const parseNum = (s: string) => {
+        const cleaned = s.replace(/[^\d.-]/g, '');
+        const n = Number(cleaned);
+        return isNaN(n) ? 0 : n;
+      };
+      
+      if (config.op === 'add') {
+        return `¥${(parseNum(valA) + parseNum(valB)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      }
+      if (config.op === 'sub') {
+        return `¥${(parseNum(valA) - parseNum(valB)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      }
+      if (config.op === 'count') {
+        if (!valA || valA === '-') return '0';
+        return String(valA.split(',').length);
+      }
+      if (config.op === 'condition') {
+        const isEmpty = !valA || valA.trim() === '' || valA === '-' || valA === '未指派';
+        return isEmpty ? valC : valB;
+      }
+      if (config.op === 'datediff') {
+        if (!valA || !valB || valA === '-' || valB === '-') return '-';
+        const dA = new Date(valA);
+        const dB = new Date(valB);
+        if (isNaN(dA.getTime()) || isNaN(dB.getTime())) return '-';
+        const days = Math.floor((dA.getTime() - dB.getTime()) / (1000 * 60 * 60 * 24));
+        return `${days} 天`;
+      }
+      if (config.op === 'percentage') {
+        const nA = parseNum(valA);
+        const nB = parseNum(valB);
+        if (nB === 0) return '0.0%';
+        return `${((nA / nB) * 100).toFixed(1)}%`;
+      }
+      if (config.op === 'isnull') {
+        const empty = !valA || valA.trim() === '' || valA === '-' || valA === '未指派';
+        return empty ? '是 (空值)' : '否 (非空)';
+      }
+      if (config.op === 'formula') {
+        const nA = parseNum(valA);
+        const factor = Number(config.constantVal) || 0;
+        return `¥${(nA * factor).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      }
+    }
+    
+    // 5. Manual User Custom Columns (Scoped and saved within this specific ledger config)
+    if (col.columnSource === 'manual') {
+      const data = activeLedger.manualData || {};
+      const rowData = data[row.id] || {};
+      return rowData[col.field] || '';
+    }
+    
+    return '-';
   };
 
-  // --------------------------------------------------------
-  // Data ingestion & filtering
-  // --------------------------------------------------------
-  const getProcessedRows = () => {
-    if (!activeConfig) return [];
+  const getCellValueByKey = (row: any, fieldKey: string): string => {
+    if (!activeLedger) return '';
+    const col = activeLedger.columns.find(c => c.field === fieldKey);
+    if (!col) return '';
+    return getCellValue(row, col);
+  };
 
-    // Ingest combined rows
-    const sources = activeConfig.dataSources && activeConfig.dataSources.length > 0
-      ? activeConfig.dataSources
-      : [activeConfig.dataSource];
-
-    let combined: any[] = [];
-    sources.forEach(src => {
-      let raw: any[] = [];
-      let label = '';
-      if (src === 'pre') { raw = projects; label = '前置需求'; }
-      else if (src === 'purchase') { raw = contracts.filter(c => c.contractType === 'purchase'); label = '采购合同'; }
-      else if (src === 'service') { raw = contracts.filter(c => c.contractType === 'service'); label = '服务合同'; }
-      else if (src === 'bid') { raw = bids; label = '投标标书'; }
-
-      raw.forEach(item => {
-        combined.push({
-          ...item,
-          __sourceType: src,
-          __sourceLabel: label,
-          __originalItem: item
-        });
-      });
-    });
-
-    // 1. Text Query Search Box
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      combined = combined.filter(row => {
-        return activeConfig.columns.filter(c => c.visible).some(col => {
-          const val = getCellValue(row, col, activeConfig).toLowerCase();
-          return val.includes(q);
+  // ----------------------------------------------------------------------
+  // LEDGER ROW FILTERING AND SORTING ENGINE
+  // ----------------------------------------------------------------------
+  const processedRows = useMemo(() => {
+    if (!activeLedger) return [];
+    
+    let result = [...compiledRows];
+    
+    // 1. Apply configured ledger filters
+    if (activeLedger.filters.length > 0) {
+      result = result.filter(row => {
+        return activeLedger.filters.every(f => {
+          const cellValue = getCellValueByKey(row, f.field);
+          const currentString = cellValue.toLowerCase();
+          const filterValue = f.value.toLowerCase();
+          
+          switch (f.operator) {
+            case 'equals':
+              return currentString === filterValue;
+            case 'not_equals':
+              return currentString !== filterValue;
+            case 'contains':
+              return currentString.includes(filterValue);
+            case 'greater_than_or_equal': {
+              const numCell = Number(cellValue.replace(/[^\d.-]/g, ''));
+              const numF = Number(f.value);
+              if (!isNaN(numCell) && !isNaN(numF)) return numCell >= numF;
+              return currentString >= filterValue;
+            }
+            case 'less_than_or_equal': {
+              const numCell = Number(cellValue.replace(/[^\d.-]/g, ''));
+              const numF = Number(f.value);
+              if (!isNaN(numCell) && !isNaN(numF)) return numCell <= numF;
+              return currentString <= filterValue;
+            }
+            default:
+              return true;
+          }
         });
       });
     }
-
-    // 2. Excel Funnel Filters
-    Object.keys(excelFilters).forEach(field => {
-      const allowed = excelFilters[field];
-      if (allowed && allowed.length > 0) {
-        const col = activeConfig.columns.find(c => c.field === field);
-        if (col) {
-          combined = combined.filter(row => {
-            const cellVal = getCellValue(row, col, activeConfig) || '(空白)';
-            return allowed.includes(cellVal);
-          });
-        }
-      }
-    });
-
-    // 3. Sorting Config
-    if (activeConfig.sorts && activeConfig.sorts.length > 0) {
-      combined = [...combined].sort((a, b) => {
-        for (const s of activeConfig.sorts) {
-          const col = activeConfig.columns.find(c => c.field === s.field);
-          if (!col) continue;
-          const valA = getCellValue(a, col, activeConfig);
-          const valB = getCellValue(b, col, activeConfig);
-
-          // Numeric comparison if digits
-          const numA = Number(valA.replace(/[^0-9.-]/g, ''));
-          const numB = Number(valB.replace(/[^0-9.-]/g, ''));
-          if (!isNaN(numA) && !isNaN(numB) && valA !== '' && valB !== '') {
-            if (numA !== numB) {
-              return s.direction === 'asc' ? numA - numB : numB - numA;
-            }
+    
+    // 2. Apply configured sorts
+    if (activeLedger.sorts.length > 0) {
+      result.sort((a, b) => {
+        for (const s of activeLedger.sorts) {
+          const valA = getCellValueByKey(a, s.field);
+          const valB = getCellValueByKey(b, s.field);
+          
+          const numA = Number(valA.replace(/[^\d.-]/g, ''));
+          const numB = Number(valB.replace(/[^\d.-]/g, ''));
+          
+          if (!isNaN(numA) && !isNaN(numB) && valA !== '-' && valB !== '-') {
+            if (numA < numB) return s.direction === 'asc' ? -1 : 1;
+            if (numA > numB) return s.direction === 'asc' ? 1 : -1;
           } else {
-            if (valA !== valB) {
-              return s.direction === 'asc' 
-                ? valA.localeCompare(valB, 'zh-CN') 
-                : valB.localeCompare(valA, 'zh-CN');
-            }
+            if (valA < valB) return s.direction === 'asc' ? -1 : 1;
+            if (valA > valB) return s.direction === 'asc' ? 1 : -1;
           }
         }
         return 0;
       });
     }
-
-    return combined;
-  };
-
-  const processedRows = getProcessedRows();
-
-  // --------------------------------------------------------
-  // Cell Inline editing write back to databases
-  // --------------------------------------------------------
-  const handleSaveCell = (row: any, field: string, val: string) => {
-    const col = activeConfig.columns.find(c => c.field === field);
-    if (!col) return;
-
-    if (col.category === 'manual') {
-      // Save to manual values
-      setConfigs(prev => prev.map(c => {
-        if (c.id === activeConfig.id) {
-          const mValues = c.manualValues || {};
-          const rowValues = mValues[row.id] || {};
-          return {
-            ...c,
-            manualValues: {
-              ...mValues,
-              [row.id]: {
-                ...rowValues,
-                [field]: val
-              }
-            }
-          };
-        }
-        return c;
-      }));
-      addSystemLog(`[在线台账] 更新了自定义单元格 [${col.label}]: ${val}`);
-    } else if (col.category === 'business') {
-      // Write back to database!
-      let parsedValue: any = val;
-      if (field === 'amount') {
-        parsedValue = val.replace(/[^0-9.]/g, '');
-      }
-
-      if (row.__sourceType === 'pre') {
-        updateProject(row.id, { [field]: parsedValue });
-      } else if (row.__sourceType === 'purchase' || row.__sourceType === 'service') {
-        updateContract(row.id, { [field]: parsedValue });
-      } else if (row.__sourceType === 'bid') {
-        updateBid(row.id, { [field]: parsedValue });
-      }
-      addSystemLog(`[数据库回写] 单元格直接改动并同步底层表字段 [${FIELD_TRANSLATIONS[field] || field}]: ${val}`);
+    
+    // 3. Apply global search query
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      result = result.filter(row => {
+        return activeLedger.columns.some(col => {
+          if (!col.visible) return false;
+          const val = getCellValue(row, col);
+          return val.toLowerCase().includes(query);
+        });
+      });
     }
-    setEditingCell(null);
+    
+    return result;
+  }, [activeLedger, compiledRows, searchQuery]);
+
+  // ----------------------------------------------------------------------
+  // DYNAMIC COLUMNS ORDER RESOLVER
+  // ----------------------------------------------------------------------
+  const sortedColumns = useMemo(() => {
+    if (!activeLedger) return [];
+    return [...activeLedger.columns].sort((a, b) => a.order - b.order);
+  }, [activeLedger]);
+
+  // ----------------------------------------------------------------------
+  // ACTIONS / HANDLERS
+  // ----------------------------------------------------------------------
+  
+  // Ledger Star toggling
+  const handleToggleLedgerStar = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setLedgers(prev => prev.map(l => l.id === id ? { ...l, isStarred: !l.isStarred } : l));
   };
 
-  // --------------------------------------------------------
-  // Creation Flow Action handlers
-  // --------------------------------------------------------
-  const handleStartCreation = () => {
-    setNewLedgerName(`在线台账 #${configs.length + 1}`);
-    setNewLedgerSources(['purchase']);
-    setCreateStep(1);
-    setIsCreateModalOpen(true);
-  };
-
-  const toggleSourceCheckbox = (src: DataSourceType) => {
-    if (newLedgerSources.includes(src)) {
-      if (newLedgerSources.length > 1) {
-        setNewLedgerSources(prev => prev.filter(s => s !== src));
-      }
-    } else {
-      setNewLedgerSources(prev => [...prev, src]);
-    }
-  };
-
-  const handleFinishCreation = () => {
-    if (!newLedgerName.trim()) {
-      alert('请输入台账名称！');
+  // Create Ledger (Unified V2 Setup Flow)
+  const handleCreateLedger = () => {
+    const name = newLedgerName.trim();
+    if (!name) {
+      alert('请先输入台账名称');
       return;
     }
+    if (newLedgerSources.length === 0) {
+      alert('请至少选择一个业务数据源');
+      return;
+    }
+    
+    const id = `ledger-${Date.now()}`;
+    const initialColumns: V2ColumnConfig[] = [];
+    let order = 1;
 
-    // Assemble column configurations
-    const assembledColumns: ViewColumnConfig[] = [];
-    let orderIndex = 1;
+    // Auto generate selected fields as Columns
+    selectedImportFields.forEach(field => {
+      let colLabel = FIELD_METADATA_MAP[field] || field;
+      let source: 'db' | 'state' = 'db';
+      if (field === 'nodeName') {
+        colLabel = '当前节点状态';
+        source = 'state';
+      }
 
-    // Collect checked fields across all selected sources
-    const uniqueFields = new Set<string>();
-    newLedgerSources.forEach(src => {
-      const selectedFields = sourceFieldSelection[src];
-      selectedFields.forEach(f => uniqueFields.add(f));
-    });
-
-    // Add source badge indicator as first column
-    assembledColumns.push({
-      field: '__sourceLabel',
-      label: '数据源分类',
-      visible: true,
-      order: orderIndex++,
-      width: 100,
-      category: 'status'
-    });
-
-    // Add business fields
-    uniqueFields.forEach(f => {
-      if (f === 'status') return; // Skip status since it is added below as standard column
-      assembledColumns.push({
-        field: f,
-        label: FIELD_TRANSLATIONS[f] || f,
+      initialColumns.push({
+        field: field === 'nodeName' ? 'status_name' : field,
+        label: colLabel,
         visible: true,
-        order: orderIndex++,
-        width: f === 'name' ? 200 : 130,
-        category: 'business'
+        width: field === 'name' ? 220 : 130,
+        order: order++,
+        columnSource: source,
+        dbField: field
       });
     });
 
-    // Add current workflow status as standard column
-    assembledColumns.push({
-      field: 'status',
-      label: '工作流节点',
+    // Add Node Attribute by default as helper state column
+    initialColumns.push({
+      field: 'status_attr',
+      label: '业务属性节点',
       visible: true,
-      order: orderIndex++,
       width: 120,
-      category: 'status'
+      order: order++,
+      columnSource: 'state',
+      dbField: 'nodeAttr'
     });
 
-    const newConfig: DataCenterConfig = {
-      id: `ledger-${Date.now()}`,
-      name: `📋 ${newLedgerName.trim()}`,
-      type: 'view',
+    const newLedger: V2LedgerConfig = {
+      id,
+      name,
       isStarred: false,
-      dataSource: newLedgerSources[0], // fallback
-      dataSources: newLedgerSources,
+      dataSources: [...newLedgerSources],
       filters: [],
-      columns: assembledColumns,
+      columns: initialColumns,
       sorts: [],
-      customFields: [],
-      manualValues: {},
+      manualData: {},
       createdAt: new Date().toISOString()
     };
 
-    setConfigs(prev => [...prev, newConfig]);
-    setSelectedConfigId(newConfig.id);
-    setIsCreateModalOpen(false);
-    addSystemLog(`[在线台账] 成功创建了多源在线台账: ${newConfig.name} (聚合了 ${newLedgerSources.map(s => FIELD_TRANSLATIONS[s] || s).join(', ')} 数据源)`);
-  };
-
-  // --------------------------------------------------------
-  // Columns manipulation and settings
-  // --------------------------------------------------------
-  const handleShiftColumn = (field: string, direction: 'left' | 'right') => {
-    const cols = [...activeConfig.columns].sort((a, b) => a.order - b.order);
-    const idx = cols.findIndex(c => c.field === field);
-    if (idx === -1) return;
-
-    if (direction === 'left' && idx > 0) {
-      const temp = cols[idx].order;
-      cols[idx].order = cols[idx - 1].order;
-      cols[idx - 1].order = temp;
-    } else if (direction === 'right' && idx < cols.length - 1) {
-      const temp = cols[idx].order;
-      cols[idx].order = cols[idx + 1].order;
-      cols[idx + 1].order = temp;
-    }
-
-    setConfigs(prev => prev.map(c => c.id === activeConfig.id ? { ...c, columns: cols } : c));
-  };
-
-  const handleToggleColumnVis = (field: string) => {
-    setConfigs(prev => prev.map(c => {
-      if (c.id === activeConfig.id) {
-        return {
-          ...c,
-          columns: c.columns.map(col => col.field === field ? { ...col, visible: !col.visible } : col)
-        };
-      }
-      return c;
-    }));
-  };
-
-  // Header click triggers instant Excel-style sorting
-  const handleToggleColumnSort = (field: string) => {
-    const existing = activeConfig.sorts?.find(s => s.field === field);
-    let updatedSorts: ViewSortConfig[] = [];
+    setLedgers(prev => [...prev, newLedger]);
+    setSelectedLedgerId(id);
+    setIsCreateLedgerModalOpen(false);
     
-    if (!existing) {
-      updatedSorts = [{ field, direction: 'asc' }];
-    } else if (existing.direction === 'asc') {
-      updatedSorts = [{ field, direction: 'desc' }];
-    } else {
-      updatedSorts = [];
-    }
-
-    setConfigs(prev => prev.map(c => c.id === activeConfig.id ? { ...c, sorts: updatedSorts } : c));
-  };
-
-  // Resize column header via mouse drag
-  const handleResizeHeader = (e: React.MouseEvent, field: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const startX = e.clientX;
-    const currentCol = activeConfig.columns.find(c => c.field === field);
-    const startWidth = currentCol?.width || 120;
-
-    const handleMouseMove = (moveEvent: MouseEvent) => {
-      const delta = moveEvent.clientX - startX;
-      const finalWidth = Math.max(60, startWidth + delta);
-      setConfigs(prev => prev.map(c => {
-        if (c.id === activeConfig.id) {
-          return {
-            ...c,
-            columns: c.columns.map(col => col.field === field ? { ...col, width: finalWidth } : col)
-          };
-        }
-        return c;
-      }));
-    };
-
-    const handleMouseUp = () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-    };
-
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-  };
-
-  // --------------------------------------------------------
-  // Add Column wizard handlers
-  // --------------------------------------------------------
-  const handleOpenAddCol = () => {
-    setNewColCategory('business');
-    setNewColBusinessField('code');
-    setNewColStatusField('status');
-    setNewColHistoryAttr('结算');
-    setNewColCalcType('process_time');
-    setNewColManualLabel('');
-    setIsAddColModalOpen(true);
-  };
-
-  const handleConfirmAddCol = () => {
-    let finalField = '';
-    let finalLabel = '';
+    // reset form
+    setNewLedgerName('');
+    setNewLedgerSources(['purchase']);
+    setSelectedImportFields(['code', 'name', 'ship', 'amount', 'supplierId', 'nodeName']);
     
-    if (newColCategory === 'business') {
-      finalField = newColBusinessField;
-      finalLabel = FIELD_TRANSLATIONS[newColBusinessField] || newColBusinessField;
-    } else if (newColCategory === 'status') {
-      finalField = newColStatusField;
-      const match = STATUS_FIELDS_OPTIONS.find(o => o.value === newColStatusField);
-      finalLabel = match ? match.label.split(' (')[0] : newColStatusField;
-    } else if (newColCategory === 'history') {
-      finalField = `history_${newColHistoryAttr}`;
-      finalLabel = `${newColHistoryAttr}时间`;
-    } else if (newColCategory === 'calc') {
-      finalField = `calc_${newColCalcType}`;
-      const match = CALC_FIELDS_OPTIONS.find(o => o.value === newColCalcType);
-      finalLabel = match ? match.label.split(' (')[0] : newColCalcType;
-    } else if (newColCategory === 'manual') {
-      if (!newColManualLabel.trim()) {
-        alert('请输入自定义列的名称！');
-        return;
-      }
-      finalField = `manual_${Date.now()}`;
-      finalLabel = newColManualLabel.trim();
-    }
+    addSystemLog(`[在线台账] 新增台账【${name}】配置成功，已自动关联 ${newLedgerSources.join(',')}。`);
+  };
 
-    // Check if column already exists
-    if (activeConfig.columns.some(c => c.field === finalField)) {
-      alert('该显示列已经在在线台账中，无需重复添加！');
+  // Add Column (Modular Redesign Step-by-Step UI)
+  const handleConfirmAddColumn = () => {
+    if (!activeLedger) return;
+    const label = newColLabel.trim();
+    if (!label) {
+      alert('请填写列标题名称');
       return;
     }
 
-    const newColumn: ViewColumnConfig = {
-      field: finalField,
-      label: finalLabel,
+    const fieldKey = `col_${newColSource}_${Date.now()}`;
+    const nextOrder = activeLedger.columns.length + 1;
+
+    const newCol: V2ColumnConfig = {
+      field: fieldKey,
+      label,
       visible: true,
-      order: activeConfig.columns.length + 1,
       width: 140,
-      category: newColCategory,
-      attrLink: newColCategory === 'history' ? newColHistoryAttr : undefined,
-      calcType: newColCategory === 'calc' ? newColCalcType : undefined
+      order: nextOrder,
+      columnSource: newColSource
     };
 
-    setConfigs(prev => prev.map(c => {
-      if (c.id === activeConfig.id) {
+    // Fill configurations depending on chosen Column Source
+    if (newColSource === 'db') {
+      newCol.dbField = newColDbField;
+    } else if (newColSource === 'state') {
+      newCol.dbField = newColStateField;
+    } else if (newColSource === 'history') {
+      newCol.historyConfig = {
+        nodeAttr: newColHistNodeAttr,
+        metric: newColHistMetric,
+        targetNodeAttr: newColHistTargetNodeAttr || undefined
+      };
+    } else if (newColSource === 'calc') {
+      newCol.calcConfig = {
+        op: newColCalcOp,
+        fieldA: newColCalcFieldA,
+        fieldB: newColCalcFieldB || undefined,
+        fieldC: newColCalcFieldC || undefined,
+        constantVal: newColCalcConstant || undefined
+      };
+    }
+
+    setLedgers(prev => prev.map(l => {
+      if (l.id === activeLedger.id) {
         return {
-          ...c,
-          columns: [...c.columns, newColumn]
+          ...l,
+          columns: [...l.columns, newCol]
         };
       }
-      return c;
+      return l;
     }));
 
-    setIsAddColModalOpen(false);
-    addSystemLog(`[在线台账] 新增显示列: 【${finalLabel}】 (分类: ${newColCategory})`);
+    setIsAddColumnModalOpen(false);
+    
+    // reset column inputs
+    setNewColLabel('');
+    setNewColSource('db');
+    addSystemLog(`[在线台账] 成功为【${activeLedger.name}】追加了「${label}」列（来源属性: ${newColSource}）。`);
   };
 
-  const handleDeleteColumn = (field: string) => {
-    if (window.confirm('确认要将该列从当前的在线台账中彻底移除吗？')) {
-      setConfigs(prev => prev.map(c => {
-        if (c.id === activeConfig.id) {
+  // Remove Column
+  const handleRemoveColumn = (field: string, label: string) => {
+    if (!activeLedger) return;
+    if (confirm(`确定要删除列“${label}”吗？这将在当前台账中永久清除该字段。`)) {
+      setLedgers(prev => prev.map(l => {
+        if (l.id === activeLedger.id) {
           return {
-            ...c,
-            columns: c.columns.filter(col => col.field !== field)
+            ...l,
+            columns: l.columns.filter(col => col.field !== field)
           };
         }
-        return c;
+        return l;
       }));
-      addSystemLog(`[在线台账] 移除了显示列: ${field}`);
+      addSystemLog(`[在线台账] 删除了台账【${activeLedger.name}】中的「${label}」列。`);
     }
   };
 
+  // Drag-and-drop simulated / manual Column Move
+  const handleMoveColumn = (field: string, direction: 'left' | 'right') => {
+    if (!activeLedger) return;
+    const cols = [...activeLedger.columns].sort((a, b) => a.order - b.order);
+    const index = cols.findIndex(col => col.field === field);
+    if (index === -1) return;
+
+    if (direction === 'left' && index > 0) {
+      const tempOrder = cols[index - 1].order;
+      cols[index - 1].order = cols[index].order;
+      cols[index].order = tempOrder;
+    } else if (direction === 'right' && index < cols.length - 1) {
+      const tempOrder = cols[index + 1].order;
+      cols[index + 1].order = cols[index].order;
+      cols[index].order = tempOrder;
+    }
+
+    setLedgers(prev => prev.map(l => l.id === activeLedger.id ? { ...l, columns: cols } : l));
+  };
+
+  // Width adjust
+  const handleResizeColumn = (field: string, delta: number) => {
+    if (!activeLedger) return;
+    setLedgers(prev => prev.map(l => {
+      if (l.id === activeLedger.id) {
+        return {
+          ...l,
+          columns: l.columns.map(col => col.field === field ? { ...col, width: Math.max(60, (col.width || 120) + delta) } : col)
+        };
+      }
+      return l;
+    }));
+  };
+
+  // Toggle Visibility
+  const handleToggleColumnVisibility = (field: string) => {
+    if (!activeLedger) return;
+    setLedgers(prev => prev.map(l => {
+      if (l.id === activeLedger.id) {
+        return {
+          ...l,
+          columns: l.columns.map(col => col.field === field ? { ...col, visible: !col.visible } : col)
+        };
+      }
+      return l;
+    }));
+  };
+
+  // Inline Editing Manual Cells (saves to local config manualData, strictly persistent)
+  const handleSaveManualCell = (rowId: string, field: string, val: string) => {
+    if (!activeLedger) return;
+    setLedgers(prev => prev.map(l => {
+      if (l.id === activeLedger.id) {
+        const manual = { ...l.manualData };
+        if (!manual[rowId]) manual[rowId] = {};
+        manual[rowId][field] = val;
+        return {
+          ...l,
+          manualData: manual
+        };
+      }
+      return l;
+    }));
+    setEditingCell(null);
+  };
+
+  // Delete Ledger
   const handleDeleteLedger = (id: string, name: string) => {
-    if (configs.length <= 1) {
-      alert('系统必须保留至少一个在线台账，无法删除唯一的配置！');
+    if (confirm(`确定要永久删除台账【${name}】吗？此操作将丢失台账内的自定列排序、手动附加批注等信息，不可撤销。`)) {
+      const remaining = ledgers.filter(l => l.id !== id);
+      setLedgers(remaining);
+      if (selectedLedgerId === id) {
+        setSelectedLedgerId(remaining.length > 0 ? remaining[0].id : null);
+      }
+      addSystemLog(`[在线台账] 删除了台账【${name}】。`);
+    }
+  };
+
+  // Export to Excel (Generates standard CSV download)
+  const handleExportCSV = () => {
+    if (!activeLedger) return;
+    const activeCols = sortedColumns.filter(c => c.visible);
+    const headers = activeCols.map(c => c.label);
+    
+    // Header row
+    let csvContent = '\uFEFF' + headers.join(',') + '\n';
+    
+    // Body rows
+    processedRows.forEach(row => {
+      const rowValues = activeCols.map(col => {
+        const val = getCellValue(row, col);
+        // Clean double quotes
+        return `"${val.replace(/"/g, '""')}"`;
+      });
+      csvContent += rowValues.join(',') + '\n';
+    });
+    
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `${activeLedger.name}_台账导出_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    addSystemLog(`[在线台账] 成功导出台账【${activeLedger.name}】至外部 Excel/CSV，包含 ${processedRows.length} 条数据。`);
+    
+    setAppAlert({
+      type: 'success',
+      title: '导出完成',
+      message: `台账「${activeLedger.name}」已转换为 Excel 可读的 CSV 文件并自动下载。\n共成功导出 ${processedRows.length} 条合并记录，包含 ${headers.length} 维度属性！`
+    });
+  };
+
+  // ----------------------------------------------------------------------
+  // DYNAMIC CONFIG FOR FILTERS & SORTS
+  // ----------------------------------------------------------------------
+  const handleAddFilter = () => {
+    if (!activeLedger) return;
+    const firstCol = activeLedger.columns[0]?.field || '';
+    const newFilter: ViewFilterConfig = {
+      field: firstCol,
+      operator: 'contains',
+      value: ''
+    };
+    setLedgers(prev => prev.map(l => l.id === activeLedger.id ? { ...l, filters: [...l.filters, newFilter] } : l));
+  };
+
+  const handleUpdateFilter = (index: number, key: keyof ViewFilterConfig, value: any) => {
+    if (!activeLedger) return;
+    setLedgers(prev => prev.map(l => {
+      if (l.id === activeLedger.id) {
+        const list = [...l.filters];
+        list[index] = { ...list[index], [key]: value };
+        return { ...l, filters: list };
+      }
+      return l;
+    }));
+  };
+
+  const handleRemoveFilter = (index: number) => {
+    if (!activeLedger) return;
+    setLedgers(prev => prev.map(l => l.id === activeLedger.id ? { ...l, filters: l.filters.filter((_, idx) => idx !== index) } : l));
+  };
+
+  const handleAddSort = () => {
+    if (!activeLedger) return;
+    const firstCol = activeLedger.columns[0]?.field || '';
+    const newSort: ViewSortConfig = {
+      field: firstCol,
+      direction: 'asc'
+    };
+    setLedgers(prev => prev.map(l => l.id === activeLedger.id ? { ...l, sorts: [...l.sorts, newSort] } : l));
+  };
+
+  const handleUpdateSort = (index: number, key: keyof ViewSortConfig, value: any) => {
+    if (!activeLedger) return;
+    setLedgers(prev => prev.map(l => {
+      if (l.id === activeLedger.id) {
+        const list = [...l.sorts];
+        list[index] = { ...list[index], [key]: value };
+        return { ...l, sorts: list };
+      }
+      return l;
+    }));
+  };
+
+  const handleRemoveSort = (index: number) => {
+    if (!activeLedger) return;
+    setLedgers(prev => prev.map(l => l.id === activeLedger.id ? { ...l, sorts: l.sorts.filter((_, idx) => idx !== index) } : l));
+  };
+
+  // Node Attribute Lists Management
+  const handleAddNodeAttr = () => {
+    const val = newNodeAttr.trim();
+    if (!val) return;
+    if (nodeAttributes.includes(val)) {
+      alert('属性已存在');
       return;
     }
-    if (window.confirm(`⚠️ 危险：确认将在线台账【${name}】彻底删除吗？删除后此台账结构及手工备注字段不可恢复！`)) {
-      const remaining = configs.filter(c => c.id !== id);
-      setConfigs(remaining);
-      setSelectedConfigId(remaining[0].id);
-      addSystemLog(`[在线台账] 彻底删除了台账配置: ${name}`);
+    addNodeAttribute(val);
+    setNewNodeAttr('');
+    addSystemLog(`[流程节点属性] 新增了统一业务属性「${val}」。`);
+  };
+
+  const handleUpdateNodeAttr = (oldVal: string) => {
+    const newVal = editingNodeAttrValue.trim();
+    if (!newVal || newVal === oldVal) {
+      setEditingNodeAttr(null);
+      return;
+    }
+    updateNodeAttribute(oldVal, newVal);
+    setEditingNodeAttr(null);
+    addSystemLog(`[流程节点属性] 更新属性「${oldVal}」为「${newVal}」。`);
+  };
+
+  const handleDeleteNodeAttr = (val: string) => {
+    if (confirm(`确定删除业务属性「${val}」吗？\n这将解除所有工作流模板步骤绑定的对应属性。`)) {
+      deleteNodeAttribute(val);
+      addSystemLog(`[流程节点属性] 删除了统一业务属性「${val}」。`);
     }
   };
-
-  const handleRenameLedgerTitle = () => {
-    if (!tempTitle.trim()) return;
-    setConfigs(prev => prev.map(c => c.id === activeConfig.id ? { ...c, name: tempTitle.trim() } : c));
-    setIsEditingTitle(false);
-    addSystemLog(`[在线台账] 已重命名台账名称为: ${tempTitle.trim()}`);
-  };
-
-  const handleToggleStar = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setConfigs(prev => prev.map(c => c.id === id ? { ...c, isStarred: !c.isStarred } : c));
-  };
-
-  // --------------------------------------------------------
-  // Excel-style funnel filter actions
-  // --------------------------------------------------------
-  const getColumnUniqueValues = (col: ViewColumnConfig) => {
-    const sources = activeConfig.dataSources && activeConfig.dataSources.length > 0
-      ? activeConfig.dataSources
-      : [activeConfig.dataSource];
-
-    let combined: any[] = [];
-    sources.forEach(src => {
-      let raw: any[] = [];
-      if (src === 'pre') raw = projects;
-      else if (src === 'purchase') raw = contracts.filter(c => c.contractType === 'purchase');
-      else if (src === 'service') raw = contracts.filter(c => c.contractType === 'service');
-      else if (src === 'bid') raw = bids;
-
-      raw.forEach(item => {
-        combined.push({
-          ...item,
-          __sourceType: src,
-          __originalItem: item
-        });
-      });
-    });
-
-    const values = combined.map(row => getCellValue(row, col, activeConfig) || '(空白)');
-    return Array.from(new Set(values));
-  };
-
-  const toggleFunnelCheckbox = (field: string, val: string) => {
-    const currentChecked = excelFilters[field] || [];
-    let updated: string[] = [];
-    if (currentChecked.includes(val)) {
-      updated = currentChecked.filter(item => item !== val);
-    } else {
-      updated = [...currentChecked, val];
-    }
-    setExcelFilters(prev => ({
-      ...prev,
-      [field]: updated
-    }));
-  };
-
-  const handleClearColumnFilter = (field: string) => {
-    setExcelFilters(prev => {
-      const copy = { ...prev };
-      delete copy[field];
-      return copy;
-    });
-    setActiveFilterDropdown(null);
-  };
-
-  const handleApplyColumnFilterSelectAll = (field: string, values: string[]) => {
-    setExcelFilters(prev => ({
-      ...prev,
-      [field]: values
-    }));
-  };
-
-  const handleClearAllFilters = () => {
-    setExcelFilters({});
-    setSearchQuery('');
-    addSystemLog(`[在线台账] 清空了所有的表格查询与漏斗筛选状态`);
-  };
-
-  // --------------------------------------------------------
-  // Excel simulated export (with audit logging)
-  // --------------------------------------------------------
-  const handleExportToExcel = () => {
-    const headers = activeConfig.columns.filter(c => c.visible).map(c => c.label);
-    addSystemLog(`[数据中心] 成功导出在线台账【${activeConfig.name}】，包含 ${processedRows.length} 行数据，${headers.length} 个导出维度`);
-    alert(`📥 已经成功生成并模拟物理下载 Excel 文件：\n【${activeConfig.name.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '')}_${new Date().toISOString().split('T')[0]}.xlsx】\n\n已安全汇集 ${processedRows.length} 行底层业务数据并生成自定义手工列，适合汇报展示。`);
-  };
-
-  // Star-sorted ledgers list
-  const sortedConfigs = [...configs].sort((a, b) => {
-    if (a.isStarred && !b.isStarred) return -1;
-    if (!a.isStarred && b.isStarred) return 1;
-    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-  });
 
   return (
-    <div className={`space-y-4 relative pb-12 animate-fade-in ${isFullScreen ? 'fixed inset-0 z-40 bg-slate-50 p-6 overflow-auto flex flex-col' : 'max-w-none w-full mx-auto'}`}>
+    <div className={`space-y-6 max-w-7xl mx-auto relative pb-12 animate-fade-in ${isFullScreen ? 'fixed inset-0 z-50 bg-white p-6 overflow-y-auto max-w-none' : ''}`}>
       
-      {/* 📊 Brand Dashboard Header */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between border-b border-slate-200 pb-4 shrink-0">
+      {/* 📊 Header */}
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between border-b border-slate-100 pb-4">
         <div>
-          <h2 className="text-xl font-bold text-slate-800 tracking-tight flex items-center space-x-2">
-            <span className="p-1.5 bg-blue-50 text-blue-600 rounded-lg">📊</span>
-            <span>采购决策数据应用中心 V2 (Online Ledgers)</span>
-            <span className="text-xs bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full border border-emerald-100 font-normal animate-pulse">
-              ● 自动维护中
+          <div className="flex items-center space-x-2.5">
+            <h2 className="text-xl font-extrabold text-slate-800 tracking-tight flex items-center space-x-2">
+              <span className="p-1.5 bg-blue-50 text-blue-600 rounded-lg">📊</span>
+              <span>数据台账中心 V2 (Procurement Ledgers)</span>
+            </h2>
+            <span className="inline-flex items-center space-x-1.5 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-100 text-[10px] font-bold font-mono">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span>数据自动挂载 - 实时响应</span>
             </span>
-          </h2>
-          <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-            像使用 Excel 一样简单地建立、浏览和维护数据台账。底层工作流同步推进、自动回写数据库、支持智能计算和用户手工备注，彻底释放生产力。
+          </div>
+          
+          <p className="text-xs text-slate-400 mt-1 flex items-center space-x-1.5 font-medium">
+            <span className="text-indigo-600 font-bold bg-indigo-50 px-1.5 py-0.2 rounded">Slogan</span>
+            <span className="italic">“所有复杂的东西交给系统，所有简单的东西留给用户。”</span>
+            <span className="text-slate-300">|</span>
+            <span>像 Excel 一样，建立由数据库自动维护、实时更新的在线台账</span>
           </p>
         </div>
-        
-        {/* Actions header group */}
-        <div className="flex items-center space-x-2 mt-3 md:mt-0">
-          <button
-            onClick={handleClearAllFilters}
-            className="px-3 py-1.5 text-xs font-bold text-slate-500 hover:text-slate-800 bg-white border border-slate-200 rounded-lg shadow-3xs cursor-pointer flex items-center space-x-1"
-            title="清空当前表格上的所有筛选"
-          >
-            <RotateCcw size={13} className="text-slate-400" />
-            <span>清空所有筛选</span>
-          </button>
 
+        {/* Global Toolbar */}
+        <div className="flex items-center space-x-2 mt-3 md:mt-0 shrink-0">
+          <button
+            onClick={() => setIsNodeAttrModalOpen(true)}
+            className="px-3 py-1.8 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-bold rounded-lg transition-all flex items-center space-x-1.5 cursor-pointer"
+            title="管理跨模板统一追踪的流程节点属性"
+          >
+            <Settings2 size={13.5} />
+            <span>⚙️ 节点业务属性映射</span>
+          </button>
+          
           <button
             onClick={() => setIsFullScreen(!isFullScreen)}
-            className="px-3 py-1.5 text-xs font-bold bg-white border border-slate-200 text-slate-600 hover:text-slate-800 rounded-lg shadow-3xs cursor-pointer flex items-center space-x-1"
-            title={isFullScreen ? '退出全屏' : '全屏宽视界使用'}
+            className="p-1.8 text-slate-500 hover:text-slate-800 bg-slate-50 hover:bg-slate-100 rounded-lg border border-slate-200 transition-all cursor-pointer"
+            title={isFullScreen ? '退出全屏' : '全屏宽表视图'}
           >
-            {isFullScreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
-            <span>{isFullScreen ? '退出全屏' : '全屏视界'}</span>
+            {isFullScreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
           </button>
         </div>
       </div>
 
-      <div className={`grid grid-cols-1 lg:grid-cols-5 gap-5 items-start ${isFullScreen ? 'flex-1 min-h-0' : ''}`}>
+      {/* Grid Layout of Ledgers and Active Table */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         
-        {/* ========================================================= */}
-        {/* LEFT COMPONENT: ONLINE LEDGERS SELECTOR AND LISTS          */}
-        {/* ========================================================= */}
-        <div className="lg:col-span-1 bg-white border border-slate-200 rounded-xl p-4 shadow-3xs space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-50 pb-2">
-            <h3 className="text-xs font-bold text-slate-500 tracking-wider uppercase flex items-center space-x-1.5">
-              <Database size={12} className="text-slate-400" />
-              <span>我的在线台账</span>
-            </h3>
-            <span className="text-[10px] text-slate-400 font-mono">共 {configs.length} 个</span>
-          </div>
+        {/* Left Side: Ledger List Drawer */}
+        <div className="lg:col-span-3 space-y-4">
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3 shadow-3xs">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center space-x-1">
+                <Layers size={11} className="text-slate-400" />
+                <span>在线台账列表 ({ledgers.length})</span>
+              </span>
+              
+              <button
+                onClick={() => setIsCreateLedgerModalOpen(true)}
+                className="p-1 bg-blue-600 hover:bg-blue-700 text-white rounded-md transition-all shadow-3xs hover:scale-105 cursor-pointer flex items-center justify-center"
+                title="创建新台账"
+              >
+                <Plus size={13} />
+              </button>
+            </div>
 
-          {/* Create LEDGER big Excel styled button */}
-          <button
-            onClick={handleStartCreation}
-            className="w-full py-2.5 px-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold shadow-sm transition-all cursor-pointer flex items-center justify-center space-x-1.5"
-          >
-            <Plus size={14} />
-            <span>＋ 新建在线台账</span>
-          </button>
+            {/* Quick search in left side */}
+            <div className="relative">
+              <Search size={12} className="absolute left-2.5 top-2.5 text-slate-400" />
+              <input
+                type="text"
+                placeholder="搜索台账..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full bg-white border border-slate-250 rounded-lg pl-8 pr-3 py-1.8 text-xs focus:ring-1 focus:ring-blue-100 focus:outline-none font-medium text-slate-700 placeholder-slate-400"
+              />
+            </div>
 
-          {/* Scrollable Ledger list */}
-          <div className="space-y-1.5 max-h-[420px] overflow-y-auto pr-1">
-            {sortedConfigs.map(c => {
-              const isActive = c.id === selectedConfigId;
-              const rawCount = getLedgerRows(c).length;
-
-              return (
-                <div
-                  key={c.id}
-                  onClick={() => {
-                    setSelectedConfigId(c.id);
-                    setExcelFilters({});
-                    setEditingCell(null);
-                    setIsEditingTitle(false);
-                  }}
-                  className={`group w-full text-left px-3 py-2.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center justify-between border ${
-                    isActive 
-                      ? 'bg-slate-800 border-slate-800 text-white font-bold shadow-2xs' 
-                      : 'bg-slate-50 border-slate-100 text-slate-600 hover:bg-white hover:border-slate-300 hover:text-slate-800'
-                  }`}
-                >
-                  <div className="flex items-center space-x-2 truncate">
-                    <button
-                      onClick={(e) => handleToggleStar(c.id, e)}
-                      className={`hover:scale-110 transition-transform ${
-                        c.isStarred ? 'text-amber-400' : 'text-slate-300 group-hover:text-slate-400'
+            {/* List */}
+            <div className="space-y-1.5 max-h-96 overflow-y-auto pr-1">
+              {ledgers.length === 0 ? (
+                <div className="text-center py-6 text-xs text-slate-400 border border-dashed border-slate-200 rounded-lg bg-white">
+                  暂无在线台账，请点击右上方加号新建
+                </div>
+              ) : (
+                ledgers.map(l => {
+                  const isActive = l.id === selectedLedgerId;
+                  return (
+                    <div
+                      key={l.id}
+                      onClick={() => setSelectedLedgerId(l.id)}
+                      className={`group p-2.5 rounded-lg border text-left cursor-pointer transition-all flex flex-col justify-between ${
+                        isActive 
+                          ? 'bg-blue-600 border-blue-600 text-white shadow-2xs' 
+                          : 'bg-white border-slate-200 text-slate-700 hover:border-slate-350 hover:bg-slate-50/50'
                       }`}
                     >
-                      <Star size={13} fill={c.isStarred ? 'currentColor' : 'none'} />
-                    </button>
-                    <span className="truncate">{c.name.replace(/^[^\s]+ /, '')}</span>
-                  </div>
-                  <div className="flex items-center space-x-1.5 shrink-0 ml-1.5">
-                    <span className={`text-[10px] px-1.5 py-0.2 rounded font-mono ${isActive ? 'bg-slate-700 text-slate-200' : 'bg-slate-200 text-slate-500'}`}>
-                      {rawCount}行
-                    </span>
-                    {!isActive && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDeleteLedger(c.id, c.name);
-                        }}
-                        className="text-slate-300 hover:text-rose-500 opacity-0 group-hover:opacity-100 p-0.5 rounded transition-all"
-                        title="删除台账"
-                      >
-                        <Trash2 size={11} />
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+                      <div className="flex items-start justify-between">
+                        <span className="font-bold text-xs truncate max-w-[160px]">
+                          {l.name}
+                        </span>
+                        
+                        <div className="flex items-center space-x-1 shrink-0 ml-1.5">
+                          <button
+                            onClick={(e) => handleToggleLedgerStar(l.id, e)}
+                            className={`p-0.5 rounded transition-colors ${
+                              isActive
+                                ? 'text-blue-200 hover:text-yellow-200'
+                                : l.isStarred ? 'text-amber-500' : 'text-slate-300 hover:text-slate-500'
+                            }`}
+                          >
+                            <Star size={11} fill={l.isStarred ? 'currentColor' : 'none'} />
+                          </button>
+                          
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteLedger(l.id, l.name);
+                            }}
+                            className={`p-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity ${
+                              isActive 
+                                ? 'text-blue-100 hover:text-rose-200' 
+                                : 'text-slate-300 hover:text-rose-600 hover:bg-rose-50'
+                            }`}
+                          >
+                            <Trash2 size={11} />
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between mt-2 font-mono text-[9px]">
+                        <span className={isActive ? 'text-blue-200' : 'text-slate-400'}>
+                          数据源: {l.dataSources.map(s => {
+                            if (s === 'pre') return '需求';
+                            if (s === 'purchase') return '采购合同';
+                            if (s === 'service') return '服务合同';
+                            if (s === 'bid') return '标书';
+                            return s;
+                          }).join('/')}
+                        </span>
+                        <span className={isActive ? 'text-blue-200' : 'text-slate-400'}>
+                          {l.columns.length} 维度
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
           </div>
 
-          <div className="border-t border-slate-100 pt-3">
-            <div className="p-3 bg-blue-50/40 rounded-lg border border-blue-100/50 text-[11px] text-blue-700 space-y-1.5">
-              <div className="font-bold flex items-center space-x-1">
-                <Info size={11} className="text-blue-600" />
-                <span>自动维护法则</span>
-              </div>
-              <p className="leading-relaxed text-slate-500">
-                在线台账不是一次性的查询结果，而是与业务表单数据实时绑定的数据通道。每当您在工作台更新项目状态或新签署合同，此处的台账便会自动重算并完美渲染，零手工统计。
-              </p>
-            </div>
+          {/* Quick tips */}
+          <div className="bg-blue-50/50 border border-blue-100 rounded-xl p-3 text-[11px] text-blue-700 space-y-1.5 leading-relaxed font-medium">
+            <p className="font-bold flex items-center space-x-1">
+              <Info size={11} />
+              <span>数据中心 V2 产品设计：</span>
+            </p>
+            <p>1. 数据自动提取：跨模块并存的多维数据模型，无需任何强制合并和转换。</p>
+            <p>2. 节点属性解耦：不限制各流程自定义名称，基于属性聚合映射，实现完美一致追踪。</p>
+            <p>3. 智能加总计算：支持多维度业务数据二次智能汇总，完全不占额外存储。</p>
           </div>
         </div>
 
-        {/* ========================================================= */}
-        {/* RIGHT COMPONENT: SPREADSHEET VIEWER AND GRIDS             */}
-        {/* ========================================================= */}
-        <div className={`lg:col-span-4 space-y-3 flex flex-col ${isFullScreen ? 'flex-1 min-h-0' : ''}`}>
-          
-          {activeConfig ? (
-            <div className={`space-y-3 ${isFullScreen ? 'flex flex-col flex-1 min-h-0' : ''}`}>
+        {/* Right Side: Active Wide Table */}
+        <div className="lg:col-span-9 space-y-4">
+          {activeLedger ? (
+            <div className="bg-white border border-slate-200 rounded-xl shadow-2xs overflow-hidden flex flex-col">
               
-              {/* 1. Dashboard Ribbon with Title & Operations */}
-              <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-3xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
-                <div className="flex items-center space-x-3.5 min-w-0">
-                  <button
-                    onClick={(e) => handleToggleStar(activeConfig.id, e)}
-                    className={`hover:scale-110 transition-transform ${
-                      activeConfig.isStarred ? 'text-amber-500' : 'text-slate-300 hover:text-slate-400'
-                    }`}
-                  >
-                    <Star size={18} fill={activeConfig.isStarred ? 'currentColor' : 'none'} />
-                  </button>
-
-                  {isEditingTitle ? (
-                    <div className="flex items-center space-x-1.5">
-                      <input
-                        type="text"
-                        value={tempTitle}
-                        onChange={(e) => setTempTitle(e.target.value)}
-                        onKeyDown={(e) => e.key === 'Enter' && handleRenameLedgerTitle()}
-                        className="px-2 py-1 border border-slate-300 rounded-lg text-sm font-bold focus:outline-none focus:border-blue-500 bg-white text-slate-800"
-                        autoFocus
-                      />
-                      <button
-                        onClick={handleRenameLedgerTitle}
-                        className="p-1 bg-emerald-50 text-emerald-600 rounded-md hover:bg-emerald-100 cursor-pointer"
-                      >
-                        <Check size={14} />
-                      </button>
-                      <button
-                        onClick={() => setIsEditingTitle(false)}
-                        className="p-1 bg-slate-100 text-slate-500 rounded-md hover:bg-slate-200 cursor-pointer"
-                      >
-                        <X size={14} />
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center space-x-2 truncate">
-                      <h3 className="text-base font-bold text-slate-800 truncate">
-                        {activeConfig.name.replace(/^[^\s]+ /, '')}
-                      </h3>
-                      <button
-                        onClick={() => {
-                          setIsEditingTitle(true);
-                          setTempTitle(activeConfig.name);
-                        }}
-                        className="p-1 text-slate-400 hover:text-slate-600 rounded-md hover:bg-slate-50 transition-colors"
-                        title="重命名台账"
-                      >
-                        <Edit2 size={13} />
-                      </button>
-                    </div>
-                  )}
-
-                  {/* Badges of sources */}
-                  <div className="hidden md:flex items-center space-x-1 shrink-0">
-                    {(activeConfig.dataSources || [activeConfig.dataSource]).map(src => (
-                      <span key={src} className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-bold border border-slate-200">
-                        {src === 'pre' ? '前置需求' : src === 'purchase' ? '采购合同' : src === 'service' ? '服务合同' : '标书'}
-                      </span>
-                    ))}
-                  </div>
+              {/* Ledger Configuration Toolbar */}
+              <div className="bg-slate-50/50 border-b border-slate-200 p-3 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center space-x-3">
+                  <h3 className="font-extrabold text-slate-800 text-sm flex items-center space-x-2">
+                    <span className="text-base">📋</span>
+                    <span>{activeLedger.name}</span>
+                  </h3>
+                  
+                  <span className="text-slate-300">|</span>
+                  
+                  {/* Sync status */}
+                  <span className="text-[10px] text-slate-400 font-mono bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded-md">
+                    关联源: {activeLedger.dataSources.map(s => {
+                      if (s === 'pre') return '前置需求';
+                      if (s === 'purchase') return '采购合同';
+                      if (s === 'service') return '服务合同';
+                      if (s === 'bid') return '投标/标书';
+                      return s;
+                    }).join(', ')}
+                  </span>
                 </div>
 
-                {/* Operations Ribbon */}
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <button
-                    onClick={handleOpenAddCol}
-                    className="px-3 py-1.5 text-xs font-bold bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-lg cursor-pointer transition-colors flex items-center space-x-1"
-                  >
-                    <Plus size={13} />
-                    <span>新增列</span>
-                  </button>
-
+                {/* Table Interactions */}
+                <div className="flex items-center space-x-2">
                   <button
                     onClick={() => setIsColumnPanelOpen(!isColumnPanelOpen)}
-                    className={`px-3 py-1.5 text-xs font-bold rounded-lg cursor-pointer transition-colors flex items-center space-x-1 border ${
+                    className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center space-x-1 cursor-pointer transition-all ${
                       isColumnPanelOpen 
-                        ? 'bg-slate-800 text-white border-slate-800' 
-                        : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                        ? 'bg-blue-50 border border-blue-300 text-blue-700' 
+                        : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
                     }`}
                   >
-                    <SlidersHorizontal size={13} />
-                    <span>列排版与显示</span>
-                    <ChevronDown size={12} className={`transform transition-transform ${isColumnPanelOpen ? 'rotate-180' : ''}`} />
+                    <Columns size={12} />
+                    <span>自定义列 ({activeLedger.columns.length})</span>
                   </button>
 
                   <button
-                    onClick={handleExportToExcel}
-                    className="px-3 py-1.5 text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg shadow-xs cursor-pointer transition-colors flex items-center space-x-1"
+                    onClick={() => setIsFiltersPanelOpen(!isFiltersPanelOpen)}
+                    className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center space-x-1 cursor-pointer transition-all ${
+                      isFiltersPanelOpen || activeLedger.filters.length > 0
+                        ? 'bg-amber-50 border border-amber-300 text-amber-700' 
+                        : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
                   >
-                    <FileSpreadsheet size={13} />
-                    <span>导出 Excel</span>
+                    <Filter size={12} />
+                    <span>条件过滤 ({activeLedger.filters.length})</span>
+                  </button>
+
+                  <button
+                    onClick={() => setIsSortsPanelOpen(!isSortsPanelOpen)}
+                    className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center space-x-1 cursor-pointer transition-all ${
+                      isSortsPanelOpen || activeLedger.sorts.length > 0
+                        ? 'bg-indigo-50 border border-indigo-300 text-indigo-700' 
+                        : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <ArrowUpDown size={12} />
+                    <span>多列排序 ({activeLedger.sorts.length})</span>
+                  </button>
+
+                  <span className="text-slate-200">|</span>
+
+                  <button
+                    onClick={handleExportCSV}
+                    className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center space-x-1 cursor-pointer shadow-3xs transition-all hover:scale-103"
+                  >
+                    <FileSpreadsheet size={12} />
+                    <span>导出为 Excel (CSV)</span>
                   </button>
                 </div>
               </div>
 
-              {/* 2. Collapsible Column Configurator drawer */}
+              {/* Sub-panels Drawer: Column Toggles / Dragging orders */}
               {isColumnPanelOpen && (
-                <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-3xs space-y-3 animate-slide-down shrink-0">
-                  <div className="flex items-center justify-between border-b border-slate-50 pb-1.5">
-                    <h4 className="text-xs font-bold text-slate-700 flex items-center space-x-1">
-                      <Columns size={12} className="text-blue-500" />
-                      <span>列顺序与可见性设置</span>
-                    </h4>
-                    <span className="text-[10px] text-slate-400">(拖动台账表头或使用下方按钮配置列的排版)</span>
+                <div className="bg-slate-50/50 border-b border-slate-200 p-4 space-y-3 animate-fade-in text-xs">
+                  <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                    <span className="font-bold text-slate-700 flex items-center space-x-1.5">
+                      <Columns size={13} className="text-blue-500" />
+                      <span>配置台账列排版、调整列宽及显示排序</span>
+                    </span>
+                    <button
+                      onClick={() => setIsAddColumnModalOpen(true)}
+                      className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-[11px] font-bold transition-all shadow-3xs cursor-pointer flex items-center space-x-1"
+                    >
+                      <Plus size={12} />
+                      <span>新增列 (智能属性)</span>
+                    </button>
                   </div>
+                  
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5 max-h-44 overflow-y-auto py-1">
+                    {sortedColumns.map(col => {
+                      let sourceColor = 'bg-blue-50 text-blue-700 border-blue-200';
+                      if (col.columnSource === 'state') sourceColor = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                      if (col.columnSource === 'history') sourceColor = 'bg-purple-50 text-purple-700 border-purple-200';
+                      if (col.columnSource === 'calc') sourceColor = 'bg-amber-50 text-amber-700 border-amber-200';
+                      if (col.columnSource === 'manual') sourceColor = 'bg-pink-50 text-pink-700 border-pink-200';
 
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-                    {activeConfig.columns
-                      .sort((a, b) => a.order - b.order)
-                      .map((col, index, arr) => {
-                        let catBadge = '';
-                        let catStyle = '';
-                        if (col.category === 'business') { catBadge = '业务'; catStyle = 'bg-blue-50 text-blue-600 border-blue-200'; }
-                        else if (col.category === 'status') { catBadge = '流转'; catStyle = 'bg-purple-50 text-purple-600 border-purple-200'; }
-                        else if (col.category === 'history') { catBadge = '历史'; catStyle = 'bg-amber-50 text-amber-600 border-amber-200'; }
-                        else if (col.category === 'calc') { catBadge = '智能'; catStyle = 'bg-emerald-50 text-emerald-600 border-emerald-200'; }
-                        else { catBadge = '手工'; catStyle = 'bg-slate-50 text-slate-600 border-slate-200'; }
-
-                        return (
-                          <div
-                            key={col.field}
-                            className={`p-2 rounded-lg border flex items-center justify-between text-xs transition-all ${
-                              col.visible 
-                                ? 'bg-slate-50 border-slate-200 text-slate-800 font-medium' 
-                                : 'bg-slate-50/50 border-dashed border-slate-200 text-slate-400 opacity-60'
-                            }`}
-                          >
-                            <div className="flex items-center space-x-1.5 truncate">
-                              <button
-                                onClick={() => handleToggleColumnVis(col.field)}
-                                className="text-slate-400 hover:text-slate-600 cursor-pointer shrink-0"
-                                title={col.visible ? '隐藏此列' : '显示此列'}
-                              >
-                                {col.visible ? <Eye size={12} /> : <EyeOff size={12} />}
-                              </button>
-                              <span className="truncate" title={col.label}>{col.label}</span>
-                              <span className={`text-[9px] px-1 rounded-sm border shrink-0 scale-90 ${catStyle}`}>
-                                {catBadge}
-                              </span>
-                            </div>
-
-                            <div className="flex items-center space-x-0.5 shrink-0 ml-1">
-                              <button
-                                onClick={() => handleShiftColumn(col.field, 'left')}
-                                disabled={index === 0}
-                                className="p-0.5 text-slate-400 hover:bg-slate-100 disabled:opacity-20 rounded"
-                                title="向左移动"
-                              >
-                                <MoveUp size={10} className="transform -rotate-90" />
-                              </button>
-                              <button
-                                onClick={() => handleShiftColumn(col.field, 'right')}
-                                disabled={index === arr.length - 1}
-                                className="p-0.5 text-slate-400 hover:bg-slate-100 disabled:opacity-20 rounded"
-                                title="向右移动"
-                              >
-                                <MoveDown size={10} className="transform -rotate-90" />
-                              </button>
-                              {col.field !== 'name' && col.field !== 'status' && col.field !== '__sourceLabel' && (
-                                <button
-                                  onClick={() => handleDeleteColumn(col.field)}
-                                  className="p-0.5 text-slate-300 hover:text-rose-600 rounded"
-                                  title="移除此列"
-                                >
-                                  <Trash2 size={10} />
-                                </button>
-                              )}
-                            </div>
+                      return (
+                        <div key={col.field} className="flex items-center justify-between p-2 rounded-lg bg-white border border-slate-200 text-xs font-medium">
+                          <div className="flex items-center space-x-2 truncate">
+                            <input
+                              type="checkbox"
+                              checked={col.visible}
+                              onChange={() => handleToggleColumnVisibility(col.field)}
+                              className="rounded text-blue-600 focus:ring-blue-100 cursor-pointer"
+                            />
+                            <span className="truncate max-w-[85px]" title={col.label}>{col.label}</span>
+                            <span className={`text-[8px] px-1 rounded-sm border truncate shrink-0 scale-90 ${sourceColor}`}>
+                              {col.columnSource === 'db' ? '库' : col.columnSource === 'state' ? '状态' : col.columnSource === 'history' ? '历史' : col.columnSource === 'calc' ? '算' : '手'}
+                            </span>
                           </div>
-                        );
-                      })}
+                          
+                          {/* Reordering Controls */}
+                          <div className="flex items-center space-x-0.5 shrink-0 ml-1.5">
+                            <button
+                              onClick={() => handleMoveColumn(col.field, 'left')}
+                              className="p-0.5 bg-slate-50 text-slate-500 hover:bg-slate-100 rounded border border-slate-200"
+                              title="向左移一位"
+                            >
+                              <MoveUp size={10} className="rotate-270" />
+                            </button>
+                            <button
+                              onClick={() => handleMoveColumn(col.field, 'right')}
+                              className="p-0.5 bg-slate-50 text-slate-500 hover:bg-slate-100 rounded border border-slate-200"
+                              title="向右移一位"
+                            >
+                              <MoveDown size={10} className="rotate-270" />
+                            </button>
+                            <button
+                              onClick={() => handleResizeColumn(col.field, 20)}
+                              className="px-1 py-0.5 bg-slate-50 hover:bg-slate-100 rounded border border-slate-200 text-[9px] font-mono"
+                              title="加宽 20px"
+                            >
+                              +
+                            </button>
+                            <button
+                              onClick={() => handleResizeColumn(col.field, -20)}
+                              className="px-1 py-0.5 bg-slate-50 hover:bg-slate-100 rounded border border-slate-200 text-[9px] font-mono"
+                              title="缩窄 20px"
+                            >
+                              -
+                            </button>
+                            <button
+                              onClick={() => handleRemoveColumn(col.field, col.label)}
+                              className="p-0.5 text-slate-300 hover:text-rose-600 rounded"
+                              title="删除此维度"
+                            >
+                              <Trash2 size={10} />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
 
-              {/* 3. Search and stats row */}
-              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
-                {/* Search query input */}
-                <div className="relative w-full sm:max-w-xs">
-                  <Search size={14} className="absolute left-3 top-2.5 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="输入检索词进行过滤筛选..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full bg-white border border-slate-200 rounded-lg pl-9 pr-4 py-1.5 text-xs text-slate-700 placeholder-slate-400 focus:outline-none focus:border-blue-500 shadow-3xs"
-                  />
-                  {searchQuery && (
-                    <button onClick={() => setSearchQuery('')} className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600">
-                      <X size={12} />
-                    </button>
-                  )}
-                </div>
-
-                <div className="text-xs text-slate-400 flex items-center space-x-3.5">
-                  <span>符合过滤条件的台账条目数: <span className="font-bold text-blue-600 font-mono text-sm">{processedRows.length}</span> / <span className="font-mono">{getLedgerRows(activeConfig).length}</span> 项</span>
-                  {Object.keys(excelFilters).length > 0 && (
-                    <span className="bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full text-[10px] font-bold">
-                      🛡️ 激活了 {Object.keys(excelFilters).length} 个字段的漏斗过滤
+              {/* Sub-panels Drawer: Filters Config */}
+              {isFiltersPanelOpen && (
+                <div className="bg-slate-50/50 border-b border-slate-200 p-4 space-y-3 animate-fade-in text-xs">
+                  <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                    <span className="font-bold text-slate-700 flex items-center space-x-1.5">
+                      <Filter size={13} className="text-amber-500" />
+                      <span>配置动态条件过滤器 (AND 联合生效)</span>
                     </span>
+                    <button
+                      onClick={handleAddFilter}
+                      className="px-2 py-0.8 bg-amber-600 hover:bg-amber-700 text-white rounded text-[11px] font-bold transition-all shadow-3xs cursor-pointer flex items-center space-x-1"
+                    >
+                      <Plus size={11} />
+                      <span>添加新过滤条件</span>
+                    </button>
+                  </div>
+
+                  {activeLedger.filters.length === 0 ? (
+                    <div className="text-center py-4 text-slate-400 bg-white border border-dashed border-slate-250 rounded-lg">
+                      目前未应用任何过滤条件。所有合并的数据行均处于加载显示状态。
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {activeLedger.filters.map((filt, idx) => (
+                        <div key={idx} className="flex items-center space-x-2 bg-white p-2 border border-slate-200 rounded-lg">
+                          <select
+                            value={filt.field}
+                            onChange={(e) => handleUpdateFilter(idx, 'field', e.target.value)}
+                            className="p-1 rounded border border-slate-200 bg-white"
+                          >
+                            {activeLedger.columns.map(c => (
+                              <option key={c.field} value={c.field}>{c.label}</option>
+                            ))}
+                          </select>
+
+                          <select
+                            value={filt.operator}
+                            onChange={(e) => handleUpdateFilter(idx, 'operator', e.target.value as any)}
+                            className="p-1 rounded border border-slate-200 bg-white font-bold text-slate-600"
+                          >
+                            <option value="contains">包含 (Contains)</option>
+                            <option value="equals">精确匹配 (Equals)</option>
+                            <option value="not_equals">不等于 (Not Equals)</option>
+                            <option value="greater_than_or_equal">大于或等于 (&gt;=)</option>
+                            <option value="less_than_or_equal">小于或等于 (&lt;=)</option>
+                          </select>
+
+                          <input
+                            type="text"
+                            value={filt.value}
+                            onChange={(e) => handleUpdateFilter(idx, 'value', e.target.value)}
+                            placeholder="过滤阈值..."
+                            className="flex-1 p-1 rounded border border-slate-200 font-medium text-slate-700 bg-white"
+                          />
+
+                          <button
+                            onClick={() => handleRemoveFilter(idx)}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
-              </div>
+              )}
 
-              {/* 4. EXCEL-STYLE INTERACTIVE DATA GRID */}
-              <div className={`border border-slate-200 rounded-xl bg-white overflow-auto shadow-3xs relative ${isFullScreen ? 'flex-1 min-h-0' : 'max-h-[560px]'}`}>
-                <table className="w-full border-collapse text-left table-fixed">
-                  
-                  {/* Table Header */}
-                  <thead className="bg-slate-50 border-b border-slate-200 sticky top-0 z-10">
-                    <tr>
-                      <th className="w-12 text-center text-slate-400 font-mono text-xs border-r border-slate-200 select-none py-2.5 bg-slate-50">
-                        Row
+              {/* Sub-panels Drawer: Sorts Config */}
+              {isSortsPanelOpen && (
+                <div className="bg-slate-50/50 border-b border-slate-200 p-4 space-y-3 animate-fade-in text-xs">
+                  <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                    <span className="font-bold text-slate-700 flex items-center space-x-1.5">
+                      <ArrowUpDown size={13} className="text-indigo-500" />
+                      <span>配置多列联合排序规则 (优先级由上至下)</span>
+                    </span>
+                    <button
+                      onClick={handleAddSort}
+                      className="px-2 py-0.8 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-[11px] font-bold transition-all shadow-3xs cursor-pointer flex items-center space-x-1"
+                    >
+                      <Plus size={11} />
+                      <span>添加排序维度</span>
+                    </button>
+                  </div>
+
+                  {activeLedger.sorts.length === 0 ? (
+                    <div className="text-center py-4 text-slate-400 bg-white border border-dashed border-slate-250 rounded-lg">
+                      目前未设定自定义排序，数据按系统默认建档时间升序排列。
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {activeLedger.sorts.map((srt, idx) => (
+                        <div key={idx} className="flex items-center space-x-2 bg-white p-2 border border-slate-200 rounded-lg">
+                          <select
+                            value={srt.field}
+                            onChange={(e) => handleUpdateSort(idx, 'field', e.target.value)}
+                            className="p-1 rounded border border-slate-200 bg-white"
+                          >
+                            {activeLedger.columns.map(c => (
+                              <option key={c.field} value={c.field}>{c.label}</option>
+                            ))}
+                          </select>
+
+                          <select
+                            value={srt.direction}
+                            onChange={(e) => handleUpdateSort(idx, 'direction', e.target.value as any)}
+                            className="p-1 rounded border border-slate-200 bg-white font-bold text-slate-600"
+                          >
+                            <option value="asc">升序排列 (A-Z, Low-High)</option>
+                            <option value="desc">降序排列 (Z-A, High-Low)</option>
+                          </select>
+
+                          <button
+                            onClick={() => handleRemoveSort(idx)}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* The Excel Ledger Grid (Highly responsive, wide layout) */}
+              <div className="overflow-x-auto overflow-y-auto max-h-[500px] border-b border-slate-200">
+                <table className="w-full text-left border-collapse table-fixed">
+                  <thead>
+                    <tr className="bg-slate-100 sticky top-0 z-10 select-none border-b border-slate-200 shadow-3xs">
+                      {/* Fixed metadata column */}
+                      <th className="w-[110px] bg-slate-100 text-[10px] font-bold text-slate-500 uppercase tracking-wider p-2.5 text-center font-mono border-r border-slate-200">
+                        模块来源
                       </th>
                       
-                      {activeConfig.columns
-                        .filter(c => c.visible)
-                        .sort((a, b) => a.order - b.order)
-                        .map(col => {
-                          const isSorted = activeConfig.sorts?.find(s => s.field === col.field);
-                          const isFiltered = excelFilters[col.field] && excelFilters[col.field].length > 0;
-
-                          let catBadge = '';
-                          let catBadgeStyle = '';
-                          if (col.category === 'business') { catBadge = '业务'; catBadgeStyle = 'bg-blue-100 text-blue-700'; }
-                          else if (col.category === 'status') { catBadge = '流转'; catBadgeStyle = 'bg-purple-100 text-purple-700'; }
-                          else if (col.category === 'history') { catBadge = '历史'; catBadgeStyle = 'bg-amber-100 text-amber-700'; }
-                          else if (col.category === 'calc') { catBadge = '智能'; catBadgeStyle = 'bg-emerald-100 text-emerald-700'; }
-                          else if (col.category === 'manual') { catBadge = '手工'; catBadgeStyle = 'bg-slate-200 text-slate-700'; }
-
-                          return (
-                            <th
-                              key={col.field}
-                              style={{ width: col.width || 130 }}
-                              className="relative font-bold text-slate-700 text-xs border-r border-slate-200 px-3 py-2.5 hover:bg-slate-100/80 group select-none transition-colors"
-                            >
-                              <div className="flex items-center justify-between w-full pr-4">
-                                <div className="flex items-center space-x-1.5 min-w-0">
-                                  {/* Sort Trigger Label */}
-                                  <span 
-                                    className="truncate cursor-pointer hover:text-blue-600 font-bold"
-                                    onClick={() => handleToggleColumnSort(col.field)}
-                                    title="点击进行升序/降序排列"
-                                  >
-                                    {col.label}
-                                  </span>
-                                  {isSorted && (
-                                    <span className="text-blue-500 text-[10px] font-mono">
-                                      {isSorted.direction === 'asc' ? '▲' : '▼'}
-                                    </span>
-                                  )}
-                                  <span className={`text-[8px] px-1 rounded-sm shrink-0 scale-90 ${catBadgeStyle}`}>
-                                    {catBadge}
-                                  </span>
-                                </div>
-
-                                {/* Excel Funnel filter trigger button */}
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setFilterSearchQuery('');
-                                    setActiveFilterDropdown(activeFilterDropdown === col.field ? null : col.field);
-                                  }}
-                                  className={`p-1 rounded hover:bg-slate-200 cursor-pointer shrink-0 transition-colors ${
-                                    isFiltered ? 'text-amber-500 bg-amber-50' : 'text-slate-400 opacity-60 hover:opacity-100'
-                                  }`}
-                                  title="漏斗筛选器"
-                                >
-                                  <Filter size={11} fill={isFiltered ? 'currentColor' : 'none'} />
-                                </button>
-                              </div>
-
-                              {/* Column resize drag border handler */}
-                              <div
-                                onMouseDown={(e) => handleResizeHeader(e, col.field)}
-                                className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-blue-400 hover:w-2 group-hover:bg-slate-200 transition-colors z-20"
-                                title="左右拖动调整此列宽"
-                              />
-
-                              {/* Excel-style interactive Filter popup inside header cell */}
-                              {activeFilterDropdown === col.field && (
-                                <div
-                                  ref={dropdownRef}
-                                  className="absolute top-full right-1 mt-1 bg-white border border-slate-200 rounded-xl shadow-xl p-3 text-slate-700 min-w-[200px] z-50 animate-slide-down font-normal"
-                                >
-                                  <div className="flex items-center justify-between border-b border-slate-100 pb-1.5 mb-2">
-                                    <span className="text-xs font-bold text-slate-500">
-                                      {col.label} 漏斗过滤
-                                    </span>
-                                    <button 
-                                      onClick={() => handleClearColumnFilter(col.field)}
-                                      className="text-[10px] text-blue-600 hover:underline cursor-pointer"
-                                    >
-                                      清空
-                                    </button>
-                                  </div>
-
-                                  {/* Filter values search */}
-                                  <input
-                                    type="text"
-                                    placeholder="搜索选项..."
-                                    value={filterSearchQuery}
-                                    onChange={(e) => setFilterSearchQuery(e.target.value)}
-                                    className="w-full bg-slate-50 border border-slate-200 rounded px-2 py-1 text-[11px] mb-2 focus:outline-none"
-                                  />
-
-                                  {/* Checkbox unique values list */}
-                                  <div className="max-h-40 overflow-y-auto space-y-1.5 pr-1 text-[11px]">
-                                    {(() => {
-                                      const allVals = getColumnUniqueValues(col);
-                                      const filteredVals = allVals.filter(v => v.toLowerCase().includes(filterSearchQuery.toLowerCase()));
-                                      
-                                      return (
-                                        <>
-                                          <div className="flex items-center space-x-1.5 py-0.5 border-b border-slate-50">
-                                            <button
-                                              type="button"
-                                              onClick={() => handleApplyColumnFilterSelectAll(col.field, allVals)}
-                                              className="text-[10px] text-blue-500 hover:underline cursor-pointer"
-                                            >
-                                              全选
-                                            </button>
-                                            <span className="text-slate-300">|</span>
-                                            <button
-                                              type="button"
-                                              onClick={() => handleClearColumnFilter(col.field)}
-                                              className="text-[10px] text-blue-500 hover:underline cursor-pointer"
-                                            >
-                                              清空
-                                            </button>
-                                          </div>
-                                          {filteredVals.map(v => {
-                                            const isChecked = (excelFilters[col.field] || []).includes(v);
-                                            return (
-                                              <label key={v} className="flex items-center space-x-2 py-0.5 hover:bg-slate-50 rounded px-1 cursor-pointer truncate">
-                                                <input
-                                                  type="checkbox"
-                                                  checked={isChecked}
-                                                  onChange={() => toggleFunnelCheckbox(col.field, v)}
-                                                  className="rounded text-blue-600 focus:ring-0 cursor-pointer h-3 w-3"
-                                                />
-                                                <span className="truncate">{v}</span>
-                                              </label>
-                                            );
-                                          })}
-                                        </>
-                                      );
-                                    })()}
-                                  </div>
-
-                                  <div className="border-t border-slate-100 pt-2 mt-2 flex justify-end">
-                                    <button
-                                      onClick={() => setActiveFilterDropdown(null)}
-                                      className="px-2.5 py-1 bg-slate-800 text-white rounded text-[10px] font-bold hover:bg-slate-700 cursor-pointer"
-                                    >
-                                      确定
-                                    </button>
-                                  </div>
-                                </div>
-                              )}
-                            </th>
-                          );
-                        })}
+                      {sortedColumns.filter(c => c.visible).map(col => (
+                        <th 
+                          key={col.field} 
+                          style={{ width: `${col.width || 130}px` }}
+                          className="bg-slate-100 text-[11px] font-extrabold text-slate-700 p-2.5 border-r border-slate-200 relative group truncate"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="truncate" title={col.label}>{col.label}</span>
+                          </div>
+                        </th>
+                      ))}
                     </tr>
                   </thead>
-
-                  {/* Table Body */}
+                  
                   <tbody className="divide-y divide-slate-150">
                     {processedRows.length === 0 ? (
                       <tr>
-                        <td colSpan={activeConfig.columns.filter(c => c.visible).length + 1} className="py-12 text-center text-slate-400 text-xs font-semibold">
-                          没有符合过滤筛选条件的台账记录。可以尝试 “清空所有筛选” 或双击进行数据补录。
+                        <td 
+                          colSpan={sortedColumns.filter(c => c.visible).length + 1} 
+                          className="text-center p-16 text-xs text-slate-400 bg-slate-50/50"
+                        >
+                          没有找到符合当前过滤和查询条件的台账数据。请调整过滤面板或清空查询搜索词。
                         </td>
                       </tr>
                     ) : (
-                      processedRows.map((row, idx) => {
-                        return (
-                          <tr key={`${row.__sourceType}-${row.id}`} className="hover:bg-slate-50/75 transition-colors">
-                            <td className="text-center text-slate-400 font-mono text-xs border-r border-slate-200 bg-slate-50 py-2">
-                              {idx + 1}
-                            </td>
-                            
-                            {activeConfig.columns
-                              .filter(c => c.visible)
-                              .sort((a, b) => a.order - b.order)
-                              .map(col => {
-                                const val = getCellValue(row, col, activeConfig);
-                                const isEditing = editingCell?.rowId === row.id && editingCell?.field === col.field;
-                                const isEditable = col.category === 'business' || col.category === 'manual';
+                      processedRows.map((row, rIdx) => {
+                        let moduleBadge = 'bg-blue-50 text-blue-700 border-blue-100';
+                        let moduleText = '采购合同';
+                        if (row.sourceType === 'pre') {
+                          moduleBadge = 'bg-amber-50 text-amber-700 border-amber-100';
+                          moduleText = '需求项目';
+                        } else if (row.sourceType === 'service') {
+                          moduleBadge = 'bg-emerald-50 text-emerald-700 border-emerald-100';
+                          moduleText = '服务合同';
+                        } else if (row.sourceType === 'bid') {
+                          moduleBadge = 'bg-purple-50 text-purple-700 border-purple-100';
+                          moduleText = '标书投标';
+                        }
 
-                                return (
-                                  <td
-                                    key={col.field}
-                                    onDoubleClick={() => {
-                                      if (isEditable) {
-                                        setEditingCell({ rowId: row.id, field: col.field });
-                                        // For editing raw business field we look up raw value
-                                        const rawVal = col.category === 'business' ? row[col.field] : (activeConfig.manualValues?.[row.id]?.[col.field] || '');
-                                        setTempEditValue(rawVal ? String(rawVal) : '');
-                                      }
-                                    }}
-                                    className={`border-r border-slate-150 px-3 py-1.5 text-xs text-slate-700 font-medium truncate relative ${
-                                      isEditable ? 'hover:bg-blue-50/35 cursor-cell group/cell' : 'bg-slate-50/20'
-                                    }`}
-                                  >
-                                    {isEditing ? (
-                                      <input
-                                        type="text"
-                                        value={tempEditValue}
-                                        onChange={(e) => setTempEditValue(e.target.value)}
-                                        onBlur={() => handleSaveCell(row, col.field, tempEditValue)}
-                                        onKeyDown={(e) => {
-                                          if (e.key === 'Enter') handleSaveCell(row, col.field, tempEditValue);
-                                          if (e.key === 'Escape') setEditingCell(null);
-                                        }}
-                                        className="w-full h-full bg-white border border-blue-500 focus:ring-0 outline-none px-1.5 py-0.5 rounded text-xs font-medium text-slate-800"
-                                        autoFocus
-                                      />
-                                    ) : (
-                                      <div className="flex items-center justify-between w-full">
-                                        <span className={`truncate ${col.field === 'code' ? 'font-mono text-[11px] text-slate-500' : ''}`} title={val}>
-                                          {val || <span className="text-slate-300 italic font-normal">(空白)</span>}
-                                        </span>
-                                        {isEditable && (
-                                          <span className="opacity-0 group-hover/cell:opacity-100 text-[9px] text-blue-500 font-mono scale-90 shrink-0 select-none">
-                                            ✎ 双击编辑
-                                          </span>
-                                        )}
-                                        {!isEditable && (
-                                          <Lock size={9} className="text-slate-300 shrink-0 opacity-0 group-hover/cell:opacity-60" title="只读属性列 (自动计算)" />
-                                        )}
-                                      </div>
-                                    )}
-                                  </td>
-                                );
-                              })}
+                        return (
+                          <tr key={row.id} className="hover:bg-slate-50/60 transition-colors">
+                            {/* Source module identifier badge */}
+                            <td className="p-2.5 text-center border-r border-slate-200 bg-slate-50/30">
+                              <span className={`inline-flex items-center text-[10px] px-1.8 py-0.5 rounded-full border font-bold ${moduleBadge}`}>
+                                {moduleText}
+                              </span>
+                            </td>
+
+                            {sortedColumns.filter(c => c.visible).map(col => {
+                              const valueStr = getCellValue(row, col);
+                              const isEditableManual = col.columnSource === 'manual';
+                              const isEditingThis = editingCell?.rowId === row.id && editingCell?.field === col.field;
+                              
+                              // Display node color indicator for state color columns
+                              const isNodeColor = col.columnSource === 'state' && col.dbField === 'nodeColor';
+                              let colorDot = '';
+                              if (isNodeColor) {
+                                if (valueStr === 'green') colorDot = 'bg-emerald-500 text-emerald-700';
+                                else if (valueStr === 'blue') colorDot = 'bg-blue-500 text-blue-700';
+                                else if (valueStr === 'red') colorDot = 'bg-rose-500 text-rose-700';
+                                else colorDot = 'bg-amber-500 text-amber-700';
+                              }
+
+                              return (
+                                <td 
+                                  key={col.field} 
+                                  className={`p-2.5 border-r border-slate-200 text-xs font-medium text-slate-700 truncate ${
+                                    isEditableManual ? 'bg-pink-50/5 hover:bg-pink-50/20 cursor-pointer font-bold border-dashed' : ''
+                                  }`}
+                                  onClick={() => {
+                                    if (isEditableManual && !isEditingThis) {
+                                      setEditingCell({ rowId: row.id, field: col.field });
+                                      setTempEditValue(valueStr);
+                                    }
+                                  }}
+                                  title={isEditableManual ? '双击或选中输入自定内容，仅存留于本台账中' : valueStr}
+                                >
+                                  {isEditingThis ? (
+                                    <input
+                                      type="text"
+                                      value={tempEditValue}
+                                      onChange={(e) => setTempEditValue(e.target.value)}
+                                      onBlur={() => handleSaveManualCell(row.id, col.field, tempEditValue)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') handleSaveManualCell(row.id, col.field, tempEditValue);
+                                        else if (e.key === 'Escape') setEditingCell(null);
+                                      }}
+                                      autoFocus
+                                      className="w-full bg-white border border-blue-500 p-1 text-xs focus:outline-none rounded font-bold text-slate-800"
+                                    />
+                                  ) : isNodeColor ? (
+                                    <span className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold text-white uppercase ${colorDot}`}>
+                                      <span>{valueStr}</span>
+                                    </span>
+                                  ) : (
+                                    <span className={col.field === 'code' ? 'font-mono' : ''}>
+                                      {valueStr || '-'}
+                                    </span>
+                                  )}
+                                </td>
+                              );
+                            })}
                           </tr>
                         );
                       })
@@ -1653,389 +1554,617 @@ export const DataCenter: React.FC = () => {
                 </table>
               </div>
 
+              {/* Table Footer Stats */}
+              <div className="bg-slate-50 border-t border-slate-200 p-2.5 px-4 flex flex-col sm:flex-row sm:items-center sm:justify-between text-[11px] text-slate-500 font-mono gap-2">
+                <div className="flex items-center space-x-3">
+                  <span>共检索到数据 <strong>{processedRows.length}</strong> 行 </span>
+                  <span>|</span>
+                  <span>关联底层工作流模板数: <strong>{workflowTemplates.length}</strong> </span>
+                </div>
+                <div>
+                  <span>台账安全加载完成：{new Date().toLocaleString()}</span>
+                </div>
+              </div>
             </div>
           ) : (
-            <div className="bg-white border border-slate-200 rounded-xl p-12 text-center text-slate-400">
-              请选择或创建一个在线台账！
+            <div className="bg-white border border-slate-200 rounded-xl p-16 text-center text-slate-400 space-y-3">
+              <span className="text-4xl block">📊</span>
+              <p className="font-bold text-slate-600">采购数据台账中心 V2 暂无活跃台账</p>
+              <p className="text-xs text-slate-400">您可以在左上角点击“+”创建一个新的 Excel 实时合并台账。</p>
             </div>
           )}
         </div>
       </div>
 
-      {/* ========================================================= */}
-      {/* DIALOG 1: CREATION FLOW WIZARD ASSISTANT                   */}
-      {/* ========================================================= */}
-      {isCreateModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center p-4 z-50 backdrop-blur-2xs animate-fade-in">
-          <div className="bg-white border border-slate-200 shadow-2xl rounded-2xl max-w-lg w-full flex flex-col p-6 space-y-5 animate-scale-up">
-            
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div>
-                <h3 className="text-sm font-bold text-slate-800">
-                  新建数据库在线台账 (LEDGER CREATION)
-                </h3>
-                <p className="text-[11px] text-slate-400 mt-1">
-                  像 Excel 一样聚合多模块数据源，由程序引擎全自动重算和维护。
-                </p>
-              </div>
-              <button onClick={() => setIsCreateModalOpen(false)} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg">
+      {/* ======================= MODAL: CREATE ONLINE LEDGER (STEP-BY-STEP Flow) ======================= */}
+      {isCreateLedgerModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-xl border border-slate-150 max-w-lg w-full p-6 space-y-5 text-left">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="font-extrabold text-slate-800 text-sm flex items-center space-x-1.5">
+                <span className="p-1 bg-blue-50 text-blue-600 rounded">📊</span>
+                <span>新建在线台账 (Excel 实时联动)</span>
+              </h3>
+              <button 
+                onClick={() => setIsCreateLedgerModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-md"
+              >
                 <X size={16} />
               </button>
             </div>
 
-            {/* Stepper indicator */}
-            <div className="flex items-center justify-center space-x-3 text-xs font-bold border-b border-slate-50 pb-2">
-              <div className={`flex items-center space-x-1 ${createStep === 1 ? 'text-blue-600' : 'text-slate-400'}`}>
-                <span className={`h-5 w-5 rounded-full flex items-center justify-center text-[10px] ${createStep === 1 ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-400'}`}>1</span>
-                <span>数据来源 (多选)</span>
-              </div>
-              <span className="text-slate-300">➔</span>
-              <div className={`flex items-center space-x-1 ${createStep === 2 ? 'text-blue-600' : 'text-slate-400'}`}>
-                <span className={`h-5 w-5 rounded-full flex items-center justify-center text-[10px] ${createStep === 2 ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-400'}`}>2</span>
-                <span>选取字段显示</span>
-              </div>
+            {/* Slogan card */}
+            <div className="bg-indigo-50 border border-indigo-150 rounded-xl p-3 text-xs text-indigo-700 leading-relaxed font-medium">
+              在台账里，不应有强制统一的数据模型，不同模块的数据可以并存，系统将自动汇总列模型。
             </div>
 
-            {/* STEP 1: Select Data Sources */}
-            {createStep === 1 && (
-              <div className="space-y-4">
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-500">在线台账名称:</label>
-                  <input
-                    type="text"
-                    value={newLedgerName}
-                    onChange={(e) => setNewLedgerName(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold focus:outline-none focus:border-blue-500"
-                    placeholder="例如: 成本统计台账 / 付款完成追踪..."
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-500">数据源选择 (勾选您希望合并的数据块):</label>
-                  <div className="grid grid-cols-2 gap-2.5">
-                    
-                    <div 
-                      onClick={() => toggleSourceCheckbox('pre')}
-                      className={`p-3 rounded-xl border-2 cursor-pointer transition-all ${
-                        newLedgerSources.includes('pre') 
-                          ? 'border-blue-600 bg-blue-50/30' 
-                          : 'border-slate-150 hover:border-slate-300 bg-white'
-                      }`}
-                    >
-                      <div className="flex items-center space-x-2">
-                        <input
-                          type="checkbox"
-                          checked={newLedgerSources.includes('pre')}
-                          onChange={() => {}} // handled by parent onClick
-                          className="rounded text-blue-600"
-                        />
-                        <span className="text-xs font-bold text-slate-700">前置需求</span>
-                      </div>
-                      <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">包含轮机长提交的询价、比价和备件会签进度</p>
-                    </div>
-
-                    <div 
-                      onClick={() => toggleSourceCheckbox('purchase')}
-                      className={`p-3 rounded-xl border-2 cursor-pointer transition-all ${
-                        newLedgerSources.includes('purchase') 
-                          ? 'border-blue-600 bg-blue-50/30' 
-                          : 'border-slate-150 hover:border-slate-300 bg-white'
-                      }`}
-                    >
-                      <div className="flex items-center space-x-2">
-                        <input
-                          type="checkbox"
-                          checked={newLedgerSources.includes('purchase')}
-                          onChange={() => {}}
-                          className="rounded text-blue-600"
-                        />
-                        <span className="text-xs font-bold text-slate-700">采购合同</span>
-                      </div>
-                      <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">包含签署好的物理备件/物料买卖与付款合同</p>
-                    </div>
-
-                    <div 
-                      onClick={() => toggleSourceCheckbox('service')}
-                      className={`p-3 rounded-xl border-2 cursor-pointer transition-all ${
-                        newLedgerSources.includes('service') 
-                          ? 'border-blue-600 bg-blue-50/30' 
-                          : 'border-slate-150 hover:border-slate-300 bg-white'
-                      }`}
-                    >
-                      <div className="flex items-center space-x-2">
-                        <input
-                          type="checkbox"
-                          checked={newLedgerSources.includes('service')}
-                          onChange={() => {}}
-                          className="rounded text-blue-600"
-                        />
-                        <span className="text-xs font-bold text-slate-700">服务合同</span>
-                      </div>
-                      <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">船舶厂修、物料运输等服务类协作合同</p>
-                    </div>
-
-                    <div 
-                      onClick={() => toggleSourceCheckbox('bid')}
-                      className={`p-3 rounded-xl border-2 cursor-pointer transition-all ${
-                        newLedgerSources.includes('bid') 
-                          ? 'border-blue-600 bg-blue-50/30' 
-                          : 'border-slate-150 hover:border-slate-300 bg-white'
-                      }`}
-                    >
-                      <div className="flex items-center space-x-2">
-                        <input
-                          type="checkbox"
-                          checked={newLedgerSources.includes('bid')}
-                          onChange={() => {}}
-                          className="rounded text-blue-600"
-                        />
-                        <span className="text-xs font-bold text-slate-700">投标标书</span>
-                      </div>
-                      <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">包含商业投标项目及杨总签字归档信息</p>
-                    </div>
-
-                  </div>
-                </div>
-
-                <div className="pt-2 border-t border-slate-50 flex justify-end">
-                  <button
-                    onClick={() => setCreateStep(2)}
-                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold cursor-pointer"
-                  >
-                    下一步：选择字段显示 ➔
-                  </button>
-                </div>
+            {/* Step 1: Ledger name & source selection */}
+            <div className="space-y-4">
+              <div>
+                <label className="block text-[10px] font-extrabold text-slate-400 uppercase tracking-widest mb-1.5">
+                  1. 给新台账起个名字 (Excel Ledger Name)：
+                </label>
+                <input
+                  type="text"
+                  placeholder="如: 2026上半年总合同台账、各船舶服务流转监控..."
+                  value={newLedgerName}
+                  onChange={(e) => setNewLedgerName(e.target.value)}
+                  className="w-full px-3 py-1.8 rounded-lg border border-slate-250 text-xs font-semibold focus:ring-1 focus:ring-blue-150 focus:outline-none text-slate-700 bg-white"
+                />
               </div>
-            )}
 
-            {/* STEP 2: Choose Fields to Display */}
-            {createStep === 2 && (
-              <div className="space-y-4 max-h-[420px] overflow-y-auto pr-1">
-                <p className="text-xs text-slate-500 leading-relaxed">
-                  请为每种选中的数据源，选择需要显示的列。程序底层未对应的字段将自动填充为<b>(空白)</b>，方便统一排版。
-                </p>
-
-                <div className="space-y-4">
-                  {newLedgerSources.map(src => {
-                    const fields = DB_FIELDS_BY_SOURCE[src];
-                    const selected = sourceFieldSelection[src];
-                    const label = src === 'pre' ? '前置需求' : src === 'purchase' ? '采购合同' : src === 'service' ? '服务合同' : '投标标书';
-
+              <div>
+                <label className="block text-[10px] font-extrabold text-slate-400 uppercase tracking-widest mb-1.5">
+                  2. 勾选需要聚合的数据源 (支持多选并行)：
+                </label>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  {[
+                    { key: 'pre', label: '前置需求项目池 (Demand Projects)' },
+                    { key: 'purchase', label: '采购合同文件 (Purchase Contracts)' },
+                    { key: 'service', label: '服务合同文件 (Service Contracts)' },
+                    { key: 'bid', label: '标书投标池 (Bidding Vault)' }
+                  ].map(item => {
+                    const checked = newLedgerSources.includes(item.key as DataSourceType);
                     return (
-                      <div key={src} className="p-3 bg-slate-50 rounded-xl border border-slate-200/60 space-y-2">
-                        <div className="flex items-center justify-between border-b border-slate-150 pb-1">
-                          <span className="text-xs font-bold text-slate-700 flex items-center space-x-1">
-                            <span className="h-2 w-2 rounded-full bg-blue-500" />
-                            <span>{label} 字段选择</span>
-                          </span>
-                          <span className="text-[10px] text-slate-400">已选 {selected.length} 个</span>
+                      <label 
+                        key={item.key} 
+                        className={`flex items-start space-x-2.5 p-3 rounded-xl border cursor-pointer transition-all ${
+                          checked 
+                            ? 'bg-blue-50/50 border-blue-400 text-blue-800' 
+                            : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => {
+                            if (checked) {
+                              setNewLedgerSources(newLedgerSources.filter(s => s !== item.key));
+                            } else {
+                              setNewLedgerSources([...newLedgerSources, item.key as DataSourceType]);
+                            }
+                          }}
+                          className="rounded text-blue-600 focus:ring-blue-100 mt-0.5 cursor-pointer"
+                        />
+                        <div>
+                          <p className="font-bold text-xs">{item.label.split(' (')[0]}</p>
+                          <p className="text-[10px] text-slate-400 font-mono mt-0.5">{item.label.split(' (')[1].replace(')', '')}</p>
                         </div>
-
-                        <div className="grid grid-cols-2 gap-2 text-xs">
-                          {fields.map(f => {
-                            const isChecked = selected.includes(f.value);
-                            return (
-                              <label key={f.value} className="flex items-center space-x-2 py-0.5 cursor-pointer">
-                                <input
-                                  type="checkbox"
-                                  checked={isChecked}
-                                  onChange={() => {
-                                    let updated = [...selected];
-                                    if (isChecked) {
-                                      updated = updated.filter(item => item !== f.value);
-                                    } else {
-                                      updated = [...updated, f.value];
-                                    }
-                                    setSourceFieldSelection(prev => ({
-                                      ...prev,
-                                      [src]: updated
-                                    }));
-                                  }}
-                                  className="rounded text-blue-600 cursor-pointer"
-                                />
-                                <span className="text-slate-600 font-semibold">{f.label}</span>
-                              </label>
-                            );
-                          })}
-                        </div>
-                      </div>
+                      </label>
                     );
                   })}
                 </div>
+              </div>
 
-                <div className="pt-3 border-t border-slate-100 flex items-center justify-between shrink-0">
+              <div>
+                <label className="block text-[10px] font-extrabold text-slate-400 uppercase tracking-widest mb-1.5">
+                  3. 选择初始载入显示的业务字段：
+                </label>
+                <div className="flex flex-wrap gap-1.5 p-3 bg-slate-50 border border-slate-200 rounded-xl max-h-32 overflow-y-auto">
+                  {Object.entries(FIELD_METADATA_MAP).map(([key, label]) => {
+                    const checked = selectedImportFields.includes(key);
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => {
+                          if (checked) {
+                            setSelectedImportFields(selectedImportFields.filter(f => f !== key));
+                          } else {
+                            setSelectedImportFields([...selectedImportFields, key]);
+                          }
+                        }}
+                        className={`px-2.5 py-1 text-[11px] rounded border font-medium transition-all ${
+                          checked 
+                            ? 'bg-blue-500 border-blue-500 text-white' 
+                            : 'bg-white border-slate-250 text-slate-600 hover:border-slate-350'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
                   <button
-                    onClick={() => setCreateStep(1)}
-                    className="px-3.5 py-2 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-lg text-xs font-bold cursor-pointer"
+                    type="button"
+                    onClick={() => {
+                      const isChecked = selectedImportFields.includes('nodeName');
+                      if (isChecked) {
+                        setSelectedImportFields(selectedImportFields.filter(f => f !== 'nodeName'));
+                      } else {
+                        setSelectedImportFields([...selectedImportFields, 'nodeName']);
+                      }
+                    }}
+                    className={`px-2.5 py-1 text-[11px] rounded border font-medium transition-all ${
+                      selectedImportFields.includes('nodeName') 
+                        ? 'bg-emerald-500 border-emerald-500 text-white' 
+                        : 'bg-white border-slate-250 text-slate-600 hover:border-slate-350'
+                    }`}
                   >
-                    🠔 返回上一步
-                  </button>
-                  <button
-                    onClick={handleFinishCreation}
-                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold cursor-pointer"
-                  >
-                    🚀 确认生成台账
+                    🚀 当前流程节点名称
                   </button>
                 </div>
               </div>
-            )}
+            </div>
 
+            <div className="flex items-center justify-end space-x-2 pt-3 border-t border-slate-100 text-xs">
+              <button
+                onClick={() => setIsCreateLedgerModalOpen(false)}
+                className="px-4 py-2 border border-slate-200 hover:bg-slate-50 rounded-lg font-bold text-slate-600 transition-all cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleCreateLedger}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold shadow-3xs transition-all hover:scale-103 cursor-pointer"
+              >
+                创建并载入在线台账
+              </button>
+            </div>
           </div>
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* DIALOG 2: ADD COLUMN WIZARD                                */}
-      {/* ========================================================= */}
-      {isAddColModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center p-4 z-50 backdrop-blur-2xs animate-fade-in">
-          <div className="bg-white border border-slate-200 shadow-2xl rounded-2xl max-w-md w-full flex flex-col p-6 space-y-4 animate-scale-up">
-            
-            <div className="flex items-center justify-between border-b border-slate-150 pb-2">
-              <div>
-                <h3 className="text-sm font-bold text-slate-800">
-                  新建显示列 (ADD COLUMN WIZARD)
-                </h3>
-                <p className="text-[11px] text-slate-400 mt-0.5">
-                  精确定位列来源，系统将根据来源自动重算与渲染单元格内容。
-                </p>
-              </div>
-              <button onClick={() => setIsAddColModalOpen(false)} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg">
+      {/* ======================= MODAL: ADD CUSTOM COLUMN (V2 STEP-BY-STEP DESIGN) ======================= */}
+      {isAddColumnModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-xl border border-slate-150 max-w-lg w-full p-6 space-y-4 text-left">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="font-extrabold text-slate-800 text-sm flex items-center space-x-1.5">
+                <span className="p-1 bg-indigo-50 text-indigo-600 rounded">➕</span>
+                <span>新增台账列维度 (5类列来源定义)</span>
+              </h3>
+              <button 
+                onClick={() => setIsAddColumnModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-md"
+              >
                 <X size={16} />
               </button>
             </div>
 
-            <div className="space-y-4">
-              {/* Category radio select */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-500">第一步：选择列来源分类:</label>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {[
-                    { val: 'business', label: '① 数据库字段', desc: '关联底层数据，可双击直接回写' },
-                    { val: 'status', label: '② 当前流程状态', desc: '展示当前步骤及完成、异常状态' },
-                    { val: 'history', label: '③ 流程历史', desc: '读取某一属性节点被切换完的时间' },
-                    { val: 'calc', label: '④ 智能计算', desc: '办理耗时、超期异常等实时计算' },
-                    { val: 'manual', label: '⑤ 用户自定义列', desc: '当前台账独立手工输入列，不写回库' }
-                  ].map(opt => (
-                    <div
-                      key={opt.val}
-                      onClick={() => setNewColCategory(opt.val as any)}
-                      className={`p-2.5 rounded-xl border cursor-pointer transition-all flex flex-col text-left justify-between ${
-                        newColCategory === opt.val 
-                          ? 'border-blue-600 bg-blue-50/20' 
-                          : 'border-slate-150 hover:border-slate-300 bg-white'
-                      }`}
-                    >
-                      <span className="text-xs font-bold text-slate-800">{opt.label}</span>
-                      <p className="text-[9px] text-slate-400 mt-1 leading-tight">{opt.desc}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Step 2: Dynamic config based on category */}
-              <div className="border-t border-slate-100 pt-3 space-y-3">
-                <label className="text-xs font-bold text-slate-500">第二步：配置该列的字段参数:</label>
-                
-                {newColCategory === 'business' && (
-                  <div className="space-y-1">
-                    <span className="text-[11px] text-slate-400 block mb-1">请选取需要映射的业务模型物理字段：</span>
-                    <select
-                      value={newColBusinessField}
-                      onChange={(e) => setNewColBusinessField(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-bold text-slate-700"
-                    >
-                      {BUSINESS_FIELDS_OPTIONS.map(o => (
-                        <option key={o.value} value={o.value}>{o.label}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-
-                {newColCategory === 'status' && (
-                  <div className="space-y-1">
-                    <span className="text-[11px] text-slate-400 block mb-1">请选择流程状态属性：</span>
-                    <select
-                      value={newColStatusField}
-                      onChange={(e) => setNewColStatusField(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-bold text-slate-700"
-                    >
-                      {STATUS_FIELDS_OPTIONS.map(o => (
-                        <option key={o.value} value={o.value}>{o.label}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-
-                {newColCategory === 'history' && (
-                  <div className="space-y-2">
-                    <span className="text-[11px] text-slate-400 block">
-                      选择流程节点属性（读取离开该阶段进入下一阶段的切换时间，系统通过 Node Attribute 统一读取不同模板下同义节点）：
-                    </span>
-                    <select
-                      value={newColHistoryAttr}
-                      onChange={(e) => setNewColHistoryAttr(e.target.value as StepAttribute)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-bold text-slate-700"
-                    >
-                      <option value="申请">申请时间 (Application)</option>
-                      <option value="审批">审批完成时间 (Approval)</option>
-                      <option value="采购">采购时间 (Procurement)</option>
-                      <option value="签约">签约签署时间 (Contracting)</option>
-                      <option value="到货">到货时间 (Delivery)</option>
-                      <option value="验收">验收完成时间 (Acceptance)</option>
-                      <option value="结算">结算时间 (Settlement)</option>
-                      <option value="付款">付款完成时间 (Payment)</option>
-                      <option value="寄出">寄出寄送时间 (Dispatch)</option>
-                      <option value="完成">归档完成时间 (Completion)</option>
-                      <option value="异常">异常挂起时间 (Exception)</option>
-                    </select>
-                  </div>
-                )}
-
-                {newColCategory === 'calc' && (
-                  <div className="space-y-1">
-                    <span className="text-[11px] text-slate-400 block mb-1">请选择内置的实时智能计算公式：</span>
-                    <select
-                      value={newColCalcType}
-                      onChange={(e) => setNewColCalcType(e.target.value as any)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-bold text-slate-700"
-                    >
-                      {CALC_FIELDS_OPTIONS.map(o => (
-                        <option key={o.value} value={o.value}>{o.label}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-
-                {newColCategory === 'manual' && (
-                  <div className="space-y-1">
-                    <span className="text-[11px] text-slate-400 block mb-1">请输入该自定义备注列的表头名称:</span>
-                    <input
-                      type="text"
-                      placeholder="例如: 财务复核备注 / 轮机长已核对..."
-                      value={newColManualLabel}
-                      onChange={(e) => setNewColManualLabel(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-bold text-slate-700 placeholder-slate-400"
-                    />
-                  </div>
-                )}
-              </div>
-
+            {/* Input label first */}
+            <div>
+              <label className="block text-[10px] font-extrabold text-slate-400 uppercase tracking-widest mb-1">
+                第一步: 给追加的列起一个表头标题 (Label)：
+              </label>
+              <input
+                type="text"
+                placeholder="如: 实际发票到达时间、利息计算、超期预警、备注批注..."
+                value={newColLabel}
+                onChange={(e) => setNewColLabel(e.target.value)}
+                className="w-full px-3 py-1.8 rounded-lg border border-slate-250 text-xs font-semibold focus:ring-1 focus:ring-indigo-150 focus:outline-none text-slate-700 bg-white"
+              />
             </div>
 
-            <div className="pt-3 border-t border-slate-150 flex justify-end shrink-0">
+            {/* Step 1: Choose column source */}
+            <div className="space-y-1.5">
+              <label className="block text-[10px] font-extrabold text-slate-400 uppercase tracking-widest">
+                第二步: 选择此列的“数据源头机制” (Column Source Type)：
+              </label>
+              <div className="grid grid-cols-3 gap-1.5 text-xs">
+                {[
+                  { key: 'db', title: '① 数据库字段', desc: '读取底层表单字段', icon: <Database size={11} /> },
+                  { key: 'state', title: '② 当前流程状态', desc: '读取实时推进进度', icon: <Sparkles size={11} /> },
+                  { key: 'history', title: '③ 流程历史耗时', desc: '通过日志解析时效', icon: <History size={11} /> },
+                  { key: 'calc', title: '④ 跨列智能计算', desc: '加减/日期差/条件加总', icon: <Calculator size={11} /> },
+                  { key: 'manual', title: '⑤ 自定义备注列', desc: '手工自由录入/永久存留', icon: <Edit2 size={11} /> }
+                ].map(src => {
+                  const active = newColSource === src.key;
+                  return (
+                    <button
+                      key={src.key}
+                      onClick={() => setNewColSource(src.key as any)}
+                      className={`flex flex-col items-start p-2 rounded-xl border text-left cursor-pointer transition-all ${
+                        active 
+                          ? 'bg-indigo-50 border-indigo-400 text-indigo-900 ring-1 ring-indigo-200' 
+                          : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      <span className="font-bold text-[11px] flex items-center space-x-1">
+                        {src.icon}
+                        <span>{src.title}</span>
+                      </span>
+                      <span className="text-[9px] text-slate-400 mt-0.5 leading-tight">{src.desc}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Step 2: Dynamic config form */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-3 min-h-[140px]">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">
+                第三步: 设定对应的源头算法配置：
+              </span>
+
+              {/* 1. Database fields selection */}
+              {newColSource === 'db' && (
+                <div className="space-y-1.5 text-xs">
+                  <p className="text-[10px] text-slate-500 leading-relaxed font-medium">
+                    系统将从数据库该行的主记录上直接抽取字段的值：
+                  </p>
+                  <select
+                    value={newColDbField}
+                    onChange={(e) => setNewColDbField(e.target.value)}
+                    className="w-full p-2 border border-slate-200 rounded-lg bg-white"
+                  >
+                    {Object.entries(FIELD_METADATA_MAP).map(([key, val]) => (
+                      <option key={key} value={key}>{key} ({val})</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {/* 2. Current Workflow state configuration */}
+              {newColSource === 'state' && (
+                <div className="space-y-1.5 text-xs">
+                  <p className="text-[10px] text-slate-500 leading-relaxed font-medium">
+                    调取工作流模板与推进引擎的实时计算属性：
+                  </p>
+                  <select
+                    value={newColStateField}
+                    onChange={(e) => setNewColStateField(e.target.value)}
+                    className="w-full p-2 border border-slate-200 rounded-lg bg-white font-bold text-slate-700"
+                  >
+                    <option value="nodeName">当前所处流程步骤名称 (e.g. 收到签字对账单)</option>
+                    <option value="nodeColor">当前流程节点的报警颜色 (yellow/green/blue/red)</option>
+                    <option value="nodeAttr">当前流程步骤所映射的全局业务属性 (e.g. 结算)</option>
+                    <option value="templateName">当前行绑定的业务工作流模板名称</option>
+                    <option value="isFinished">是否已走完最末端节点归档完成 (是 / 否)</option>
+                    <option value="isOverdue">当前是否已超过收付/截止日发生超期异常</option>
+                  </select>
+                </div>
+              )}
+
+              {/* 3. Workflow History logs configuration */}
+              {newColSource === 'history' && (
+                <div className="space-y-2 text-xs">
+                  <div className="bg-purple-100/40 p-2 text-[10px] text-purple-800 rounded border border-purple-100 font-medium">
+                    ⚠️ <strong>V2 规范：</strong> 节点的“完成/离开时间”默认为系统离开此节点（即进入下一节点）的动作时刻，而非进入该节点时间，确保时效准确！
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] text-slate-400 mb-1 font-bold">指标类型 (Metric)：</label>
+                      <select
+                        value={newColHistMetric}
+                        onChange={(e) => setNewColHistMetric(e.target.value as any)}
+                        className="w-full p-1.5 border border-slate-200 rounded bg-white text-xs"
+                      >
+                        <option value="enter_time">进入节点时间</option>
+                        <option value="complete_time">完成/离开节点时间</option>
+                        <option value="passed">是否经过该节点 (是/否)</option>
+                        <option value="stay_time">在某节点滞留总天数</option>
+                        <option value="latency_between">两节点流转流逝耗时</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] text-slate-400 mb-1 font-bold">节点业务属性 (或节点名称)：</label>
+                      <select
+                        value={newColHistNodeAttr}
+                        onChange={(e) => setNewColHistNodeAttr(e.target.value)}
+                        className="w-full p-1.5 border border-slate-200 rounded bg-white text-xs font-bold"
+                      >
+                        {nodeAttributes.map(attr => (
+                          <option key={attr} value={attr}>{attr}</option>
+                        ))}
+                        {getWorkflowStepsForSource('purchase').map(name => (
+                          <option key={name} value={name}>{name} (节点名称)</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {newColHistMetric === 'latency_between' && (
+                    <div>
+                      <label className="block text-[10px] text-slate-400 mb-1 font-bold">到目标节点 (Target Node Attribute)：</label>
+                      <select
+                        value={newColHistTargetNodeAttr}
+                        onChange={(e) => setNewColHistTargetNodeAttr(e.target.value)}
+                        className="w-full p-1.5 border border-slate-200 rounded bg-white text-xs font-bold text-slate-700"
+                      >
+                        {nodeAttributes.map(attr => (
+                          <option key={attr} value={attr}>{attr}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 4. Calculated smart column configuration */}
+              {newColSource === 'calc' && (
+                <div className="space-y-2 text-xs">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] text-slate-400 mb-1 font-bold">运算规则 (Calculation Rule)：</label>
+                      <select
+                        value={newColCalcOp}
+                        onChange={(e) => setNewColCalcOp(e.target.value as any)}
+                        className="w-full p-1.5 border border-slate-200 rounded bg-white text-xs font-bold"
+                      >
+                        <option value="add">两列数字加和 (+)</option>
+                        <option value="sub">两列数字相减 (-)</option>
+                        <option value="count">成员/批次计数 (Count)</option>
+                        <option value="condition">条件填充 (If empty fill B else C)</option>
+                        <option value="datediff">日期天数差值 (Date A - Date B)</option>
+                        <option value="percentage">两列百分比占比 (A / B * 100)</option>
+                        <option value="isnull">是否为空判定 (Is Null)</option>
+                        <option value="formula">乘以固定常量系数 (e.g. A * 0.1 代理费)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] text-slate-400 mb-1 font-bold">第一操作列 (Operand Column A)：</label>
+                      <select
+                        value={newColCalcFieldA}
+                        onChange={(e) => setNewColCalcFieldA(e.target.value)}
+                        className="w-full p-1.5 border border-slate-200 rounded bg-white text-xs font-semibold text-slate-700"
+                      >
+                        <option value="">-- 请选择数据源字段 --</option>
+                        {activeLedger.columns.map(c => (
+                          <option key={c.field} value={c.field}>{c.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Operational fields depending on rule */}
+                  {['add', 'sub', 'condition', 'datediff', 'percentage'].includes(newColCalcOp) && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[10px] text-slate-400 mb-1 font-bold">第二操作列 (Operand Column B)：</label>
+                        <select
+                          value={newColCalcFieldB}
+                          onChange={(e) => setNewColCalcFieldB(e.target.value)}
+                          className="w-full p-1.5 border border-slate-200 rounded bg-white text-xs text-slate-700"
+                        >
+                          <option value="">-- 请选择数据源字段 --</option>
+                          {activeLedger.columns.map(c => (
+                            <option key={c.field} value={c.field}>{c.label}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {newColCalcOp === 'condition' && (
+                        <div>
+                          <label className="block text-[10px] text-slate-400 mb-1 font-bold">第三操作列 (Operand Column C)：</label>
+                          <select
+                            value={newColCalcFieldC}
+                            onChange={(e) => setNewColCalcFieldC(e.target.value)}
+                            className="w-full p-1.5 border border-slate-200 rounded bg-white text-xs text-slate-700"
+                          >
+                            <option value="">-- 请选择数据源字段 --</option>
+                            {activeLedger.columns.map(c => (
+                              <option key={c.field} value={c.field}>{c.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {newColCalcOp === 'formula' && (
+                    <div>
+                      <label className="block text-[10px] text-slate-400 mb-1 font-bold">乘以固定常量 (e.g. 0.06 = 6%税率)：</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        placeholder="0.06"
+                        value={newColCalcConstant}
+                        onChange={(e) => setNewColCalcConstant(e.target.value)}
+                        className="w-full p-1.5 border border-slate-200 rounded bg-white text-xs font-semibold font-mono text-slate-700"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 5. Manual empty input */}
+              {newColSource === 'manual' && (
+                <div className="space-y-1.5 text-xs text-pink-700">
+                  <div className="bg-pink-50 border border-pink-100 rounded-lg p-2.5 leading-relaxed text-[11px] font-medium">
+                    💡 <strong>备注特性：</strong> 此列数据完全由采购人员手动在此 Excel 网格内录入双击编辑。
+                    单元格的值仅在当前在线台账「{activeLedger.name}」中持久化保存，不写回主合同数据库，适合作为“领导临时备注”、“报送状态”等用途。
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-100 text-xs">
               <button
-                onClick={handleConfirmAddCol}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold cursor-pointer"
+                onClick={() => setIsAddColumnModalOpen(false)}
+                className="px-4 py-2 border border-slate-200 hover:bg-slate-50 rounded-lg font-bold text-slate-600 transition-all cursor-pointer"
               >
-                💾 确认追加到台账
+                取消
+              </button>
+              <button
+                onClick={handleConfirmAddColumn}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold shadow-3xs transition-all hover:scale-103 cursor-pointer"
+              >
+                确定加入此列
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ======================= MODAL: NODE BUSINESS ATTRIBUTE MAPPING MANAGER ======================= */}
+      {isNodeAttrModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-xl border border-slate-150 max-w-md w-full p-6 space-y-4 text-left">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="font-extrabold text-slate-800 text-sm flex items-center space-x-1.5">
+                <span className="p-1 bg-indigo-50 text-indigo-600 rounded">⚙️</span>
+                <span>管理跨模板映射节点属性</span>
+              </h3>
+              <button 
+                onClick={() => setIsNodeAttrModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-md"
+              >
+                <X size={16} />
               </button>
             </div>
 
+            <p className="text-[11px] text-slate-500 leading-relaxed font-medium bg-slate-50 border border-slate-150 p-3 rounded-lg">
+              通过绑定统一的业务节点属性，即使不同模板中的步骤名称五花八门，数据中心仍能准确追踪（例如：将采购合同的“收到签字对账单”与服务合同的“服务验收完成”统一绑定为“结算”属性）。
+            </p>
+
+            {/* Quick add */}
+            <div className="space-y-1.5 text-xs">
+              <label className="block text-[10px] font-extrabold text-slate-400 uppercase tracking-widest">
+                添加新通用业务属性：
+              </label>
+              <div className="flex items-center space-x-1.5">
+                <input
+                  type="text"
+                  placeholder="如: 开票、签章、退单、付款申请..."
+                  value={newNodeAttr}
+                  onChange={(e) => setNewNodeAttr(e.target.value)}
+                  className="flex-1 px-3 py-1.8 rounded-lg border border-slate-250 text-xs font-semibold focus:ring-1 focus:ring-indigo-150 focus:outline-none text-slate-700 bg-white"
+                  onKeyDown={(e) => e.key === 'Enter' && handleAddNodeAttr()}
+                />
+                <button
+                  onClick={handleAddNodeAttr}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold shadow-3xs transition-all cursor-pointer"
+                >
+                  添加
+                </button>
+              </div>
+            </div>
+
+            {/* Attribute list */}
+            <div className="space-y-1.5 text-xs">
+              <label className="block text-[10px] font-extrabold text-slate-400 uppercase tracking-widest">
+                当前属性列表 ({nodeAttributes.length})：
+              </label>
+              <div className="border border-slate-200 rounded-xl max-h-48 overflow-y-auto divide-y divide-slate-150 bg-slate-50/50">
+                {nodeAttributes.map((attr, idx) => {
+                  const isEditingThis = editingNodeAttr === attr;
+                  return (
+                    <div key={idx} className="flex items-center justify-between p-2.5 bg-white text-xs hover:bg-slate-50/50 transition-colors">
+                      {isEditingThis ? (
+                        <div className="flex items-center space-x-1.5 flex-1 mr-2">
+                          <input
+                            type="text"
+                            value={editingNodeAttrValue}
+                            onChange={(e) => setEditingNodeAttrValue(e.target.value)}
+                            className="flex-1 px-2 py-1 rounded border border-blue-500 text-xs font-bold text-slate-800 bg-white focus:outline-none"
+                            autoFocus
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleUpdateNodeAttr(attr);
+                              else if (e.key === 'Escape') setEditingNodeAttr(null);
+                            }}
+                          />
+                          <button
+                            onClick={() => handleUpdateNodeAttr(attr)}
+                            className="p-1 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 rounded border border-emerald-200"
+                          >
+                            <Check size={12} />
+                          </button>
+                          <button
+                            onClick={() => setEditingNodeAttr(null)}
+                            className="p-1 bg-rose-50 text-rose-600 hover:bg-rose-100 rounded border border-rose-200"
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="font-bold text-slate-700">🏷️ {attr}</span>
+                      )}
+
+                      {!isEditingThis && (
+                        <div className="flex items-center space-x-1">
+                          <button
+                            onClick={() => {
+                              setEditingNodeAttr(attr);
+                              setEditingNodeAttrValue(attr);
+                            }}
+                            className="p-1 hover:bg-slate-100 text-slate-400 hover:text-blue-600 rounded"
+                            title="重命名属性"
+                          >
+                            <Edit2 size={12} />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteNodeAttr(attr)}
+                            className="p-1 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded"
+                            title="删除该属性"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-slate-100">
+              <button
+                onClick={() => setIsNodeAttrModalOpen(false)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg cursor-pointer transition-all"
+              >
+                关闭
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Custom Non-Blocking Iframe-Compatible success Dialog */}
+      {appAlert && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-xl border border-slate-150 max-w-sm w-full p-6 space-y-4">
+            <div className="flex items-start space-x-3 text-left">
+              <div className="p-2 bg-emerald-50 text-emerald-600 rounded-lg shrink-0 mt-0.5">
+                <span className="text-lg">🎉</span>
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-sm font-bold text-slate-800">{appAlert.title}</h3>
+                <p className="text-xs text-slate-500 whitespace-pre-wrap leading-relaxed">
+                  {appAlert.message}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end pt-1">
+              <button
+                type="button"
+                onClick={() => setAppAlert(null)}
+                className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-all cursor-pointer shadow-3xs"
+              >
+                我知道了
+              </button>
+            </div>
           </div>
         </div>
       )}
 
     </div>
   );
+};
+
+// Fetch helper mapping for the sources
+const getWorkflowStepsForSource = (source: DataSourceType): string[] => {
+  return [];
 };
