@@ -155,12 +155,6 @@ interface AppContextProps {
   addSupplierCategory: (name: string) => SupplierCategory;
   updateSupplierCategory: (id: string, name: string) => void;
   deleteSupplierCategory: (id: string) => void;
-
-  // Node Attributes
-  nodeAttributes: string[];
-  addNodeAttribute: (attr: string) => void;
-  deleteNodeAttribute: (attr: string) => void;
-  updateNodeAttribute: (oldAttr: string, newAttr: string) => void;
 }
 
 const AppContext = createContext<AppContextProps | undefined>(undefined);
@@ -1461,62 +1455,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     addSystemLog(`[工作流模板] 已将模板 ID [${id}] 设为默认模板`);
   };
 
-  // Node Attributes state and actions
-  const [nodeAttributes, setNodeAttributes] = useState<string[]>(() => {
-    const saved = localStorage.getItem('p_workbench_node_attributes');
-    if (saved) return JSON.parse(saved);
-    return ['登记', '审批', '对账', '寄出', '付款', '结算', '完成'];
-  });
-
-  useEffect(() => {
-    localStorage.setItem('p_workbench_node_attributes', JSON.stringify(nodeAttributes));
-    if (window.electronAPI) {
-      window.electronAPI.saveData('nodeAttributes', nodeAttributes).catch(err => console.error(err));
-    }
-  }, [nodeAttributes]);
-
-  const addNodeAttribute = (attr: string) => {
-    const trimmed = attr.trim();
-    if (!trimmed) return;
-    setNodeAttributes(prev => {
-      if (prev.includes(trimmed)) return prev;
-      addSystemLog(`[节点属性] 新增了属性: [${trimmed}]`);
-      return [...prev, trimmed];
-    });
-  };
-
-  const deleteNodeAttribute = (attr: string) => {
-    setNodeAttributes(prev => {
-      const filtered = prev.filter(a => a !== attr);
-      addSystemLog(`[节点属性] 删除了属性: [${attr}]`);
-      return filtered;
-    });
-  };
-
-  const updateNodeAttribute = (oldAttr: string, newAttr: string) => {
-    const trimmed = newAttr.trim();
-    if (!trimmed || oldAttr === trimmed) return;
-    setNodeAttributes(prev => {
-      const idx = prev.indexOf(oldAttr);
-      if (idx === -1) return prev;
-      const copy = [...prev];
-      copy[idx] = trimmed;
-      addSystemLog(`[节点属性] 更新了属性: [${oldAttr}] → [${trimmed}]`);
-      return copy;
-    });
-    setWorkflowTemplates(prev => {
-      return prev.map(t => ({
-        ...t,
-        steps: t.steps.map(s => {
-          if (s.nodeAttribute === oldAttr) {
-            return { ...s, nodeAttribute: trimmed };
-          }
-          return s;
-        })
-      }));
-    });
-  };
-
   // Persist transitions (dual synchronization)
   useEffect(() => {
     localStorage.setItem('p_workbench_workflow_templates', JSON.stringify(workflowTemplates));
@@ -2610,10 +2548,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateWorkflowTemplate,
         duplicateWorkflowTemplate,
         setDefaultWorkflowTemplate,
-        nodeAttributes,
-        addNodeAttribute,
-        deleteNodeAttribute,
-        updateNodeAttribute,
         allTags,
         addGlobalTag,
         checklistTasks,

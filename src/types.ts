@@ -1,10 +1,12 @@
 export type ColorState = 'yellow' | 'green' | 'blue' | 'red';
 
+export type StepAttribute = '无' | '申请' | '审批' | '采购' | '签约' | '到货' | '验收' | '结算' | '付款' | '寄出' | '完成' | '异常' | '自定义';
+
 export interface WorkflowStep {
   id: string;
   name: string;
   color: ColorState;
-  nodeAttribute?: string; // Business meaning identifier
+  attribute?: StepAttribute;
 }
 
 export interface ProcessHistory {
@@ -254,6 +256,9 @@ export interface ViewColumnConfig {
   visible: boolean;      // Shown/hidden state
   width?: number;        // column width in px
   order: number;         // column drag order
+  category?: 'business' | 'status' | 'history' | 'calc' | 'manual';
+  attrLink?: StepAttribute;
+  calcType?: 'process_time' | 'approval_time' | 'stay_days' | 'is_overdue' | 'exec_days';
 }
 
 export interface ViewFilterConfig {
@@ -279,10 +284,12 @@ export interface DataCenterConfig {
   type: 'view' | 'template'; // 'view' = 动态视图, 'template' = 报表模板
   isStarred?: boolean;       // ⭐ star indicator (favorites sorted top)
   dataSource: DataSourceType;
+  dataSources?: DataSourceType[]; // Multi-source data selection
   filters: ViewFilterConfig[];
   columns: ViewColumnConfig[];
   sorts: ViewSortConfig[];
   customFields: CustomFieldConfig[];
+  manualValues?: Record<string, Record<string, string>>; // Row ID to manual column values map
   createdAt: string;
 }
 
