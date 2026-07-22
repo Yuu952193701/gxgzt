@@ -67,7 +67,7 @@ interface AppContextProps {
   addWorkflowTemplate: (template: Omit<WorkflowTemplate, 'id'>) => WorkflowTemplate;
   deleteWorkflowTemplate: (id: string) => void;
   updateWorkflowTemplate: (id: string, updates: Partial<WorkflowTemplate>) => void;
-  duplicateWorkflowTemplate: (id: string) => void;
+  duplicateWorkflowTemplate: (id: string, targetModule?: 'pre' | 'purchase' | 'service' | 'bid', newName?: string) => WorkflowTemplate | null;
   setDefaultWorkflowTemplate: (id: string) => void;
   
   // Status name resolver helpers
@@ -1428,22 +1428,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     addSystemLog(`[工作流模板] 已成功更新模板: ID [${id}]`);
   };
 
-  const duplicateWorkflowTemplate = (id: string) => {
+  const duplicateWorkflowTemplate = (
+    id: string,
+    targetModule?: 'pre' | 'purchase' | 'service' | 'bid',
+    newName?: string
+  ): WorkflowTemplate | null => {
+    let createdCopy: WorkflowTemplate | null = null;
     setWorkflowTemplates(prev => {
       const original = prev.find(t => t.id === id);
       if (!original) return prev;
       
+      const destModule = targetModule || original.module;
+      const destName = newName?.trim() || `${original.name} (副本)`;
+      const now = Date.now();
+      const randStr = () => Math.random().toString(36).substring(2, 7);
+
       const copy: WorkflowTemplate = {
         ...original,
-        id: `t-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-        name: `${original.name} (副本)`,
+        id: `tpl_${now}_${randStr()}`,
+        module: destModule,
+        name: destName,
         isDefault: false,
-        steps: original.steps.map((s, idx) => ({ ...s, id: `s-${Date.now()}-${idx}` }))
+        // Regenerate completely unique node/step IDs for the target template
+        steps: original.steps.map((s, idx) => ({
+          ...s,
+          id: `node_${now}_${idx}_${randStr()}`
+        }))
       };
       
-      addSystemLog(`[工作流模板] 复制了模板: [${original.name}] → [${copy.name}]`);
+      createdCopy = copy;
+
+      const moduleMap: Record<string, string> = {
+        pre: '前置需求',
+        purchase: '采购合同',
+        service: '服务合同',
+        bid: '标书管理'
+      };
+
+      addSystemLog(`[工作流模板] 跨分类复制模板: [${moduleMap[original.module] || original.module}] ${original.name} → [${moduleMap[destModule] || destModule}] ${copy.name}`);
       return [...prev, copy];
     });
+    return createdCopy;
   };
 
   const setDefaultWorkflowTemplate = (id: string) => {

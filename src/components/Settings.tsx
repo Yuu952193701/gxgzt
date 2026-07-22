@@ -1,9 +1,16 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useAppState } from '../context/AppContext';
-import { WorkflowStep, ColorState } from '../types';
+import { WorkflowStep, ColorState, WorkflowTemplate } from '../types';
 import { DEFAULT_PRE_STEPS, DEFAULT_POST_STEPS, DEFAULT_POST_SERVICE_STEPS, DEFAULT_BID_STEPS } from '../data';
 import { formatDateTime } from '../utils/time';
 import { Plus, Trash2, GripVertical, RefreshCw, Eye, Edit3, Settings2, Database, Download, Upload, RotateCcw, AlertTriangle, FileCheck, Terminal, ShieldAlert, FolderOpen, Tag, ExternalLink, RefreshCw as SpinIcon, Copy, Star, X, User, Users, ChevronDown, Check } from 'lucide-react';
+
+const MODULE_DISPLAY_NAMES: Record<'pre' | 'purchase' | 'service' | 'bid', string> = {
+  pre: '前置需求',
+  purchase: '采购合同',
+  service: '服务合同',
+  bid: '标书管理'
+};
 
 export const Settings: React.FC = () => {
   const {
@@ -103,6 +110,12 @@ export const Settings: React.FC = () => {
   const [isCreateTemplateModalOpen, setIsCreateTemplateModalOpen] = useState(false);
   const [newTemplateName, setNewTemplateName] = useState('');
 
+  // Cross-category workflow template duplication states
+  const [isDuplicateModalOpen, setIsDuplicateModalOpen] = useState(false);
+  const [duplicateSourceTemplate, setDuplicateSourceTemplate] = useState<WorkflowTemplate | null>(null);
+  const [duplicateTargetModule, setDuplicateTargetModule] = useState<'pre' | 'purchase' | 'service' | 'bid'>('pre');
+  const [duplicateNewName, setDuplicateNewName] = useState('');
+
   // Node attributes UI states
   const [expandedStepIds, setExpandedStepIds] = useState<Record<string, boolean>>({});
   const [isNodeAttrModalOpen, setIsNodeAttrModalOpen] = useState(false);
@@ -142,6 +155,34 @@ export const Settings: React.FC = () => {
     }
     setIsCreateTemplateModalOpen(false);
     setNewTemplateName('');
+  };
+
+  const handleConfirmDuplicateTemplate = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!duplicateSourceTemplate) return;
+    const finalName = duplicateNewName.trim();
+    if (!finalName) return;
+
+    const createdTpl = duplicateWorkflowTemplate(
+      duplicateSourceTemplate.id,
+      duplicateTargetModule,
+      finalName
+    );
+
+    const tabMap: Record<'pre' | 'purchase' | 'service' | 'bid', 'pre' | 'post' | 'post-service' | 'bid'> = {
+      'pre': 'pre',
+      'purchase': 'post',
+      'service': 'post-service',
+      'bid': 'bid'
+    };
+    setActiveWorkflowTab(tabMap[duplicateTargetModule]);
+    if (createdTpl) {
+      setSelectedTemplateId(createdTpl.id);
+    }
+
+    setIsDuplicateModalOpen(false);
+    setDuplicateSourceTemplate(null);
+    setDuplicateNewName('');
   };
 
   const handleConfirmRenameTemplate = () => {
@@ -661,10 +702,13 @@ export const Settings: React.FC = () => {
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            duplicateWorkflowTemplate(template.id);
+                            setDuplicateSourceTemplate(template);
+                            setDuplicateTargetModule(template.module);
+                            setDuplicateNewName(`${template.name} (副本)`);
+                            setIsDuplicateModalOpen(true);
                           }}
                           className="p-1 rounded text-slate-400 hover:text-blue-600 hover:bg-blue-50 cursor-pointer transition-colors"
-                          title="复制并新建为副本"
+                          title="跨分类复制流程模板"
                         >
                           <Copy size={11} />
                         </button>
@@ -1480,7 +1524,114 @@ export const Settings: React.FC = () => {
         </div>
       )}
 
-      {/* 2. Custom Rename Template Modal */}
+      {/* Cross-Category Duplicate Template Modal */}
+      {isDuplicateModalOpen && duplicateSourceTemplate && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-xl border border-slate-100 max-w-md w-full p-6 space-y-4 animate-scale-up">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="font-bold text-slate-800 text-base flex items-center space-x-2">
+                <Copy size={18} className="text-blue-500" />
+                <span>跨分类复制流程模板</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsDuplicateModalOpen(false);
+                  setDuplicateSourceTemplate(null);
+                }}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded hover:bg-slate-50 transition-colors cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmDuplicateTemplate} className="space-y-4">
+              {/* Source template info box */}
+              <div className="bg-slate-50 border border-slate-200/80 rounded-lg p-3 text-xs space-y-1">
+                <span className="text-slate-400 font-bold block text-[11px]">来源模板：</span>
+                <div className="flex items-center space-x-2 text-slate-700 font-bold">
+                  <span className="px-2 py-0.5 rounded text-[10px] bg-blue-100 text-blue-800 border border-blue-200">
+                    {MODULE_DISPLAY_NAMES[duplicateSourceTemplate.module]}
+                  </span>
+                  <span>→</span>
+                  <span className="text-blue-900">{duplicateSourceTemplate.name}</span>
+                </div>
+              </div>
+
+              {/* Target module dropdown */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-slate-600">
+                  目标分类 <span className="text-rose-500">*</span>
+                </label>
+                <select
+                  value={duplicateTargetModule}
+                  onChange={(e) => setDuplicateTargetModule(e.target.value as any)}
+                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white text-slate-800 focus:outline-none focus:border-blue-500 font-medium cursor-pointer"
+                >
+                  <option value="pre">📁 前置需求模块</option>
+                  <option value="purchase">📄 采购合同模块</option>
+                  <option value="service">⚙️ 服务合同模块</option>
+                  <option value="bid">🎯 标书管理模块</option>
+                </select>
+              </div>
+
+              {/* New template name input */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-slate-600">
+                  新模板名称 <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={duplicateNewName}
+                  onChange={(e) => setDuplicateNewName(e.target.value)}
+                  placeholder="例如：标准服务流程"
+                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg text-slate-800 focus:outline-none focus:border-blue-500 font-medium"
+                />
+              </div>
+
+              {/* Info text */}
+              <div className="p-3 bg-blue-50/60 border border-blue-100 rounded-lg text-[11px] text-blue-900 leading-relaxed space-y-1">
+                <div className="font-bold flex items-center space-x-1">
+                  <span>💡 跨分类复制与节点重构说明：</span>
+                </div>
+                <p className="text-slate-600">
+                  系统将在目标分类中重新创建一套全新的流程模板以及<b>全新流程节点（生成独立唯一ID）</b>。
+                </p>
+                <p className="text-slate-600">
+                  原模板的流程节点名称、颜色、排序、<b>节点属性 (Node Attribute)</b> 及规则设置将完整继承，两套模板独立不重叠，后续修改互不影响。
+                </p>
+              </div>
+
+              {/* Actions */}
+              <div className="flex justify-end space-x-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsDuplicateModalOpen(false);
+                    setDuplicateSourceTemplate(null);
+                  }}
+                  className="px-4 py-1.8 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 text-xs font-bold rounded-lg cursor-pointer transition-all"
+                >
+                  取消
+                </button>
+                <button
+                  type="submit"
+                  disabled={!duplicateNewName.trim()}
+                  className={`px-4 py-1.8 rounded-lg text-xs font-bold transition-all flex items-center space-x-1 ${
+                    duplicateNewName.trim()
+                      ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-3xs cursor-pointer'
+                      : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                  }`}
+                >
+                  <Copy size={13} />
+                  <span>复制</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
       {isRenameTemplateModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-xl border border-slate-100 max-w-md w-full p-6 space-y-4 animate-scale-up">
